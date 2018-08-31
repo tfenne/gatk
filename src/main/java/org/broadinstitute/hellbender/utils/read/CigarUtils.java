@@ -125,6 +125,37 @@ public final class CigarUtils {
         return result;
     }
 
+    public static int countRefBasesBasedOnCigarIgnoringHardClips(final GATKRead read, final int cigarStartIndex, final int cigarEndIndex){
+        if (read == null){
+            throw new IllegalArgumentException("null read");
+        }
+        final List<CigarElement> elems = read.getCigarElements();
+        if (cigarStartIndex < 0 || cigarEndIndex > elems.size() || cigarStartIndex > cigarEndIndex){
+            throw new IllegalArgumentException("invalid index:" + 0 + " -" + elems.size());
+        }
+        int result = 0;
+        for(int i = cigarStartIndex; i < cigarEndIndex; i++){
+            final CigarElement cigarElement = elems.get(i);
+            switch (cigarElement.getOperator()) {
+                case M:
+                case D:
+                case N:
+                case EQ:
+                case X:
+                case S:
+                    result += cigarElement.getLength();
+                    break;
+                case H:
+                case I:
+                case P:        //for these two, nothing happens.
+                    break;
+                default:
+                    throw new GATKException("Unsupported cigar operator: " + cigarElement.getOperator());
+            }
+        }
+        return result;
+    }
+
     /**
      * Removes all clipping operators from the cigar.
      */

@@ -196,6 +196,56 @@ public final class AlignmentUtils {
         return Arrays.copyOfRange(bases, basesStart, basesStop + 1);
     }
 
+    public static byte[] getBasesAlignedOneToOne(final GATKRead read) {
+        return getSequenceAlignedOneToOne(read, true, (byte)'N');
+    }
+
+    public static byte[] getBaseQualsAlignedOneToOne(final GATKRead read) {
+        return getSequenceAlignedOneToOne(read, false, (byte)0);
+    }
+
+    public static byte[] getSequenceAlignedOneToOne(final GATKRead read, final boolean forBases, final byte padWith) {
+        final Cigar cigar = read.getCigar();
+        if (!cigar.containsOperator(CigarOperator.DELETION) && !cigar.containsOperator(CigarOperator.INSERTION)) {
+            if (forBases) {
+                return read.getBasesNoCopy();
+            }
+            else {
+                return read.getBaseQualitiesNoCopy();
+            }
+        }
+        else {
+            final byte[] literalBases = forBases? read.getBasesNoCopy() : read.getBaseQualitiesNoCopy();
+            final byte[] paddedBases = new byte[CigarUtils.countRefBasesBasedOnCigarIgnoringHardClips(read, 0, cigar.numCigarElements())];
+            int literalPos = 0;
+            int paddedPos = 0;
+            for ( int i = 0; i < cigar.numCigarElements(); i++ ) {
+                final CigarElement ce = cigar.getCigarElement(i);
+                switch ( ce.getOperator() ) {
+                    case H:
+                        break; //getBases doesn't return bases for hard clips
+                    case I:
+                        literalPos += ce.getLength();  //skip inserted bases
+                        break;
+                    case M: case X: case EQ:case S: case N:
+                        System.arraycopy(literalBases, literalPos, paddedBases, paddedPos, ce.getLength());
+                        literalPos += ce.getLength();
+                        paddedPos += ce.getLength();
+                        break;
+                    case D:
+                        for ( int j = 0; j < ce.getLength(); j++ ) {  //pad deleted bases
+                            paddedBases[paddedPos] = padWith;
+                            paddedPos++;
+                        }
+                        break;
+                    default:
+                        throw new IllegalStateException("Unsupported operator " + ce);
+                }
+            }
+            return paddedBases;
+        }
+    }
+
     /**
      * Get the number of bases at which refSeq and readSeq differ, given their alignment
      *
