@@ -236,7 +236,7 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
     /*
      * Test that in GVCF mode we're >= 99% concordant with GATK3 results
      */
-    @Test(dataProvider="HaplotypeCallerTestInputs", enabled=false)
+    @Test(dataProvider="HaplotypeCallerTestInputs", enabled=false) //disabled after reference confidence change in #5172
     public void testGVCFModeIsConcordantWithGATK3_8Results(final String inputFileName, final String referenceFileName) throws Exception {
         Utils.resetRandomGenerator();
 
@@ -265,7 +265,7 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
         Assert.assertTrue(concordance >= 0.99, "Concordance with GATK 3.8 in GVCF mode is < 99% (" +  concordance + ")");
     }
 
-    @Test(dataProvider="HaplotypeCallerTestInputs", enabled=false)
+    @Test(dataProvider="HaplotypeCallerTestInputs", enabled=false) //disabled after reference confidence change in #5172
     public void testGVCFModeIsConcordantWithGATK3_8AlelleSpecificResults(final String inputFileName, final String referenceFileName) throws Exception {
         Utils.resetRandomGenerator();
         final File output = createTempFile("testGVCFModeIsConcordantWithGATK3_8AlelleSpecificResults", ".g.vcf");
