@@ -1,11 +1,13 @@
 package org.broadinstitute.hellbender.tools.genomicsdb;
 
 import com.intel.genomicsdb.model.GenomicsDBExportConfiguration;
+import com.intel.genomicsdb.model.GenomicsDBVidMapProto;
 import com.intel.genomicsdb.reader.GenomicsDBFeatureReader;
 import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.samtools.SAMSequenceRecord;
 import htsjdk.tribble.AbstractFeatureReader;
 import htsjdk.tribble.CloseableTribbleIterator;
+import htsjdk.tribble.FeatureReader;
 import htsjdk.tribble.readers.LineIterator;
 import htsjdk.tribble.readers.PositionalBufferedStream;
 import htsjdk.variant.bcf2.BCF2Codec;
@@ -17,6 +19,8 @@ import org.broadinstitute.barclay.argparser.CommandLineException;
 import org.broadinstitute.hellbender.CommandLineProgramTest;
 import org.broadinstitute.hellbender.Main;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
+import org.broadinstitute.hellbender.exceptions.UserException;
+import org.broadinstitute.hellbender.engine.FeatureDataSource;
 import org.broadinstitute.hellbender.utils.IntervalUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
@@ -25,6 +29,7 @@ import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
 import org.broadinstitute.hellbender.testutils.BaseTest;
 import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
+import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 import org.broadinstitute.hellbender.utils.variant.GATKVariantContextUtils;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
@@ -37,6 +42,9 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.*;
 import java.util.stream.Collectors;
+
+import static org.broadinstitute.hellbender.engine.FeatureDataSource.getFieldNameToListIndexInProtobufVidMappingObject;
+import static org.broadinstitute.hellbender.engine.FeatureDataSource.updateINFOFieldCombineOperation;
 
 @Test(groups = {"variantcalling"})
 public final class GenomicsDBImportIntegrationTest extends CommandLineProgramTest {
@@ -389,7 +397,7 @@ public final class GenomicsDBImportIntegrationTest extends CommandLineProgramTes
         //FIXME: copy in the extra files until Protobuf update in PR #4645 is ready
         //this updated json specifies the combine operation for the new RAW_MQandDP key; behavior for old version is hard-coded into GDB
         final String vidmapPath = toolsTestDir +"/walkers/GenotypeGVCFs/vidmap.updated.json";
-        Runtime.getRuntime().exec("cp " + new File(vidmapPath).getAbsolutePath() +" "+ workspace + "/vidmap.json");
+        //Runtime.getRuntime().exec("cp " + new File(vidmapPath).getAbsolutePath() +" "+ workspace + "/vidmap.json");
 
         checkGenomicsDBAgainstExpected(workspace, intervals, expectedCombinedVCF, referenceFile, testAll, attributesToIgnore);
     }
@@ -781,11 +789,11 @@ public final class GenomicsDBImportIntegrationTest extends CommandLineProgramTes
                 produceGTField, false);
     }
 
-    private static GenomicsDBFeatureReader<VariantContext, PositionalBufferedStream> getGenomicsDBFeatureReader(
+    private static GenomicsDBFeatureReader<VariantContext, PositionalBufferedStream>  getGenomicsDBFeatureReader(
             final String workspace, final String reference,
             final boolean produceGTField,
             final boolean sitesOnlyQuery) throws IOException {
-       GenomicsDBExportConfiguration.ExportConfiguration exportConfiguration = GenomicsDBExportConfiguration.ExportConfiguration.newBuilder()
+       GenomicsDBExportConfiguration.ExportConfiguration.Builder exportConfigurationBuilder = GenomicsDBExportConfiguration.ExportConfiguration.newBuilder()
                 .setWorkspace(workspace)
                 .setReferenceGenome(reference)
                 .setVidMappingFile(new File(workspace, GenomicsDBConstants.DEFAULT_VIDMAP_FILE_NAME).getAbsolutePath())
@@ -793,10 +801,25 @@ public final class GenomicsDBImportIntegrationTest extends CommandLineProgramTes
                 .setVcfHeaderFilename(new File(workspace, GenomicsDBConstants.DEFAULT_VCFHEADER_FILE_NAME).getAbsolutePath())
                 .setProduceGTField(produceGTField)
                 .setSitesOnlyQuery(sitesOnlyQuery)
-                .setGenerateArrayNameFromPartitionBounds(true)
-                .build();
+                .setGenerateArrayNameFromPartitionBounds(true);
 
-       return new GenomicsDBFeatureReader<>(exportConfiguration, new BCF2Codec(), Optional.empty());
+        GenomicsDBVidMapProto.VidMappingPB vidMapPB = null;
+        try {
+            vidMapPB = FeatureDataSource.getProtobufVidMappingFromJsonFile(new File(workspace, GenomicsDBConstants.DEFAULT_VIDMAP_FILE_NAME));
+        }
+        catch (final IOException e) {
+            throw new UserException("Could not open vid json file "+GenomicsDBConstants.DEFAULT_VIDMAP_FILE_NAME, e);
+        }
+        HashMap<String, Integer> fieldNameToIndexInVidFieldsList =
+                getFieldNameToListIndexInProtobufVidMappingObject(vidMapPB);
+
+        vidMapPB = updateINFOFieldCombineOperation(vidMapPB, fieldNameToIndexInVidFieldsList, GATKVCFConstants.RAW_MAPPING_QUALITY_WITH_DEPTH_KEY, "element_wise_sum");
+
+        if(vidMapPB != null) {
+            exportConfigurationBuilder.setVidMapping(vidMapPB);
+        }
+
+        return new GenomicsDBFeatureReader<>(exportConfigurationBuilder.build(), new BCF2Codec(), Optional.empty());
     }
 
     private static GenomicsDBFeatureReader<VariantContext, PositionalBufferedStream> getGenomicsDBFeatureReader(

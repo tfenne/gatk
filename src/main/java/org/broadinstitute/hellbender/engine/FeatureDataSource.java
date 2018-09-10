@@ -24,6 +24,7 @@ import com.intel.genomicsdb.model.GenomicsDBExportConfiguration;
 import com.intel.genomicsdb.reader.GenomicsDBFeatureReader;
 import com.googlecode.protobuf.format.JsonFormat;
 import com.intel.genomicsdb.model.GenomicsDBVidMapProto;
+import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 
 import java.io.File;
 import java.io.IOException;
@@ -463,6 +464,9 @@ public final class FeatureDataSource<T extends Feature> implements GATKDataSourc
         vidMapPB = updateINFOFieldCombineOperation(vidMapPB, fieldNameToIndexInVidFieldsList, "MQ_DP", "sum");
         vidMapPB = updateINFOFieldCombineOperation(vidMapPB, fieldNameToIndexInVidFieldsList, "QUALapprox", "sum");
         vidMapPB = updateINFOFieldCombineOperation(vidMapPB, fieldNameToIndexInVidFieldsList, "VarDP", "sum");
+
+
+        vidMapPB = updateINFOFieldCombineOperation(vidMapPB, fieldNameToIndexInVidFieldsList, GATKVCFConstants.RAW_MAPPING_QUALITY_WITH_DEPTH_KEY, "element_wise_sum");
 
         if(vidMapPB != null) {
             //Use rebuilt vidMap in exportConfiguration
