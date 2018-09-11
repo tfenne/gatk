@@ -264,6 +264,18 @@ public final class ReadFilterLibrary {
             return read.isUnmapped() || (read.getEnd() - read.getStart() + 1) >= 0;}}
 
     /**
+     * If original alignment and mate original alignment tags exist, filter reads that were originally chimeric (mates were on different contigs).
+     */
+    @DocumentedFeature(groupName=HelpConstants.DOC_CAT_READFILTERS, groupSummary = HelpConstants.DOC_CAT_READFILTERS_SUMMARY, summary = "Filters reads whose original alignment was chimeric.")
+    public static class ChimericOAFilter extends ReadFilter {
+        private static final long serialVersionUID = 1L;
+        @Override public boolean test(final GATKRead read) {
+            //TODO: fill in depending on tags
+            return true;
+        }
+    }
+
+    /**
      * Static, stateless read filter instances
      */
     public static final AllowAllReadsReadFilter ALLOW_ALL_READS = new AllowAllReadsReadFilter();
@@ -291,5 +303,6 @@ public final class ReadFilterLibrary {
     public static final SeqIsStoredReadFilter SEQ_IS_STORED = new SeqIsStoredReadFilter();
     public static final ValidAlignmentStartReadFilter VALID_ALIGNMENT_START = new ValidAlignmentStartReadFilter();
     public static final ValidAlignmentEndReadFilter VALID_ALIGNMENT_END = new ValidAlignmentEndReadFilter();
+    public static final ChimericOAFilter CHIMERIC_OA_FILTER = new ChimericOAFilter();
 
 }

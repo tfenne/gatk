@@ -503,6 +503,7 @@ public class Mutect2IntegrationTest extends CommandLineProgramTest {
                 "-R", MITO_REF.getAbsolutePath(),
                 "-L", "chrM:1-1000",
                 "-min-pruning", "5",
+                "--annotation", "OriginalAlignment",
                 "-O", unfilteredVcf.getAbsolutePath());
         runCommandLine(args);
 
@@ -518,6 +519,8 @@ public class Mutect2IntegrationTest extends CommandLineProgramTest {
                 "chrM:310-310 [T*, TC]",
                 "chrM:750-750 [A*, G]");
         Assert.assertTrue(expectedKeys.stream().allMatch(variantKeys::contains));
+
+        Assert.assertEquals(variants.get(0).getGenotype("NA12878").getAnyAttribute("OA_NOT_CURRENT_CONTIG"), "0");
     }
 
    @Test
