@@ -1298,7 +1298,7 @@ public final class GATKVariantContextUtils {
                 // subset INFO field annotations if available if genotype is called
                 if (genotypeAssignmentMethodUsed != GenotypeAssignmentMethod.SET_TO_NO_CALL_NO_ANNOTATIONS &&
                         genotypeAssignmentMethodUsed != GenotypeAssignmentMethod.SET_TO_NO_CALL)
-                    addInfoFieldAnnotations(vc, builder, keepOriginalChrCounts);
+                    AlleleSubsettingUtils.addInfoFieldAnnotations(vc, builder, keepOriginalChrCounts);
 
                 builder.genotypes(AlleleSubsettingUtils.subsetAlleles(vc.getGenotypes(),2,vc.getAlleles(), alleles, genotypeAssignmentMethodUsed,vc.getAttributeAsInt("DP",0)));
                 final VariantContext trimmed = trimAlleles(builder.make(), trimLeft, true);
@@ -1307,43 +1307,6 @@ public final class GATKVariantContextUtils {
 
             return biallelics;
         }
-    }
-
-    /**
-     * Add the VCF INFO field annotations for the used alleles
-     *
-     * @param vc                    original variant context
-     * @param builder               variant context builder with subset of original variant context's alleles
-     * @param keepOriginalChrCounts keep the orignal chromosome counts before subsetting
-     * @return variant context builder with updated INFO field attribute values
-     */
-    private static void addInfoFieldAnnotations(final VariantContext vc, final VariantContextBuilder builder,
-                                                final boolean keepOriginalChrCounts) {
-        Utils.nonNull(vc);
-        Utils.nonNull(builder);
-        Utils.nonNull(builder.getAlleles());
-
-        final List<Allele> alleles = builder.getAlleles();
-        if (alleles.size() < 2)
-            throw new IllegalArgumentException("the variant context builder must contain at least 2 alleles");
-
-        // don't have to subset, the original vc has the same number and hence, the same alleles
-        boolean keepOriginal = (vc.getAlleles().size() == alleles.size());
-
-        List<Integer> alleleIndecies = builder.getAlleles().stream().map(a -> vc.getAlleleIndex(a)).collect(Collectors.toList());
-        if (keepOriginalChrCounts) {
-            if (vc.hasAttribute(VCFConstants.ALLELE_COUNT_KEY))
-                builder.attribute(GATKVCFConstants.ORIGINAL_AC_KEY, keepOriginal ?
-                        vc.getAttribute(VCFConstants.ALLELE_COUNT_KEY) : alleleIndecies.stream().filter(i -> i > 0).map(j -> vc.getAttributeAsList(VCFConstants.ALLELE_COUNT_KEY).get(j - 1)).collect(Collectors.toList()).get(0));
-            if (vc.hasAttribute(VCFConstants.ALLELE_FREQUENCY_KEY))
-                builder.attribute(GATKVCFConstants.ORIGINAL_AF_KEY, keepOriginal ?
-                        vc.getAttribute(VCFConstants.ALLELE_FREQUENCY_KEY) : alleleIndecies.stream().filter(i -> i > 0).map(j -> vc.getAttributeAsList(VCFConstants.ALLELE_FREQUENCY_KEY).get(j - 1)).collect(Collectors.toList()).get(0));
-            if (vc.hasAttribute(VCFConstants.ALLELE_NUMBER_KEY)) {
-                builder.attribute(GATKVCFConstants.ORIGINAL_AN_KEY, vc.getAttribute(VCFConstants.ALLELE_NUMBER_KEY));
-            }
-        }
-
-        VariantContextUtils.calculateChromosomeCounts(builder, true);
     }
 
     /**
