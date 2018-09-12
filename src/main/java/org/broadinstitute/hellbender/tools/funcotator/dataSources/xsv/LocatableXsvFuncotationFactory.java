@@ -79,6 +79,7 @@ public class LocatableXsvFuncotationFactory extends DataSourceFuncotationFactory
 
     @VisibleForTesting
     LocatableXsvFuncotationFactory(final String name, final String version, final List<String> supportedFields){
+
         this.name = name;
         this.version = version;
 
@@ -93,11 +94,13 @@ public class LocatableXsvFuncotationFactory extends DataSourceFuncotationFactory
 
     public LocatableXsvFuncotationFactory(final String name, final String version, final LinkedHashMap<String, String> annotationOverridesMap,
                                           final FeatureInput<? extends Feature> mainSourceFileAsFeatureInput){
+
+        super(mainSourceFileAsFeatureInput);
+
         this.name = name;
         this.version = version;
 
         this.annotationOverrideMap = new LinkedHashMap<>(annotationOverridesMap);
-        this.mainSourceFileAsFeatureInput = mainSourceFileAsFeatureInput;
     }
 
 

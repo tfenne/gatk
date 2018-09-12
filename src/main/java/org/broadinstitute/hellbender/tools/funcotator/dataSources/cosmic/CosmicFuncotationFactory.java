@@ -128,8 +128,8 @@ public class CosmicFuncotationFactory extends DataSourceFuncotationFactory {
     public CosmicFuncotationFactory(final Path pathToCosmicDb,
                                     final LinkedHashMap<String, String> annotationOverridesMap,
                                     final String version) {
-        this.pathToCosmicDb = pathToCosmicDb;
 
+        this.pathToCosmicDb = pathToCosmicDb;
         this.version = version;
 
         // Connect to the DB:

@@ -1,11 +1,10 @@
-package org.broadinstitute.hellbender.tools.funcotator.engine;
+package org.broadinstitute.hellbender.tools.funcotator;
 
 import htsjdk.variant.variantcontext.VariantContext;
-import org.apache.log4j.LogManager;
-import org.apache.log4j.Logger;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.broadinstitute.hellbender.engine.FeatureContext;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
-import org.broadinstitute.hellbender.tools.funcotator.*;
 import org.broadinstitute.hellbender.tools.funcotator.dataSources.DataSourceUtils;
 import org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.GencodeFuncotation;
 import org.broadinstitute.hellbender.tools.funcotator.metadata.FuncotationMetadata;
@@ -15,20 +14,35 @@ import java.util.List;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-public class FuncotationEngine {
+/**
+ * Class that performs functional annotation of variants.
+ *
+ * Requires a set of data sources ({@link DataSourceFuncotationFactory}) from which to create {@link Funcotation}s.
+ */
+public class FuncotatorEngine {
 
-    private static final Logger logger = LogManager.getLogger(FuncotationEngine.class);
+    private static final Logger logger = LogManager.getLogger(FuncotatorEngine.class);
 
-    private FuncotationMetadata inputMetadata;
-    private List<DataSourceFuncotationFactory> dataSourceFactories;
+    private final FuncotationMetadata inputMetadata;
+    private final List<DataSourceFuncotationFactory> dataSourceFactories;
 
-    public FuncotationEngine(final FuncotationMetadata metadata, final List<DataSourceFuncotationFactory> funcotationFactories) {
+    /**
+     * Create a {@link FuncotatorEngine} using the given {@code metadata} and {@code funcotationFactories} representing
+     * the kinds of {@link Funcotation}s to be created and the data sources from which they should be created,
+     * respectively.
+     * @param metadata {@link FuncotationMetadata} containing information on the kinds of {@link Funcotation}s this {@link FuncotatorEngine} will create.
+     * @param funcotationFactories A {@link List<DataSourceFuncotationFactory>} which can create the desired {@link Funcotation}s.
+     */
+    public FuncotatorEngine(final FuncotationMetadata metadata, final List<DataSourceFuncotationFactory> funcotationFactories) {
         inputMetadata = metadata;
         dataSourceFactories = funcotationFactories;
         dataSourceFactories.sort(DataSourceUtils::datasourceComparator);
     }
 
-    public List<DataSourceFuncotationFactory> getDataSourceFactories() {
+    /**
+     * @return A {@link List<DataSourceFuncotationFactory>} being used by this {@link FuncotatorEngine} to create {@link Funcotation}s.
+     */
+    public List<DataSourceFuncotationFactory> getFuncotationFactories() {
         return dataSourceFactories;
     }
 

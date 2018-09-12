@@ -107,6 +107,7 @@ public class SimpleKeyXsvFuncotationFactory extends DataSourceFuncotationFactory
                                           final LinkedHashMap<String, String> annotationOverrides,
                                           final int numHeaderLinesToIgnore,
                                           final boolean permissiveColumns ) {
+
         this.name = name;
 
         delimiter = delim;

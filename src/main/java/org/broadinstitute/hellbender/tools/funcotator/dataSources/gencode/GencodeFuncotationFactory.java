@@ -184,6 +184,8 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
                                      final LinkedHashMap<String, String> annotationOverrides,
                                      final FeatureInput<? extends Feature> mainFeatureInput) {
 
+        super(mainFeatureInput);
+
         this.gencodeTranscriptFastaFile = gencodeTranscriptFastaFile;
 
         transcriptFastaReferenceDataSource = ReferenceDataSource.of(gencodeTranscriptFastaFile);
@@ -206,8 +208,6 @@ public class GencodeFuncotationFactory extends DataSourceFuncotationFactory {
 
         // Initialize overrides / defaults:
         initializeAnnotationOverrides( annotationOverrides );
-
-        this.mainSourceFileAsFeatureInput = mainFeatureInput;
     }
 
     //==================================================================================================================

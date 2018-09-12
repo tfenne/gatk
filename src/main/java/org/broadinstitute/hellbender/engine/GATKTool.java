@@ -870,8 +870,8 @@ public abstract class GATKTool extends CommandLineProgram {
      * @param featureType See {@link #addFeatureInputsAfterInitialization(String, String, Class, int)}
      * @return The {@link FeatureInput} used as the key for this data source.
      */
-    protected FeatureInput<? extends Feature> addFeatureInputsAfterInitialization(final String filePath, final String name,
-                                                                                  final Class<? extends Feature> featureType) {
+    public FeatureInput<? extends Feature> addFeatureInputsAfterInitialization(final String filePath, final String name,
+                                                                               final Class<? extends Feature> featureType) {
 
         return addFeatureInputsAfterInitialization(filePath, name, featureType, 0);
     }
@@ -886,14 +886,14 @@ public abstract class GATKTool extends CommandLineProgram {
      * @param featureQueryLookahead look ahead this many bases during queries that produce cache misses
      * @return The {@link FeatureInput} used as the key for this data source.
      */
-    protected FeatureInput<? extends Feature> addFeatureInputsAfterInitialization(final String filePath,
-                                                                                  final String name,
-                                                                                  final Class<? extends Feature> featureType, final int featureQueryLookahead) {
+    public FeatureInput<? extends Feature> addFeatureInputsAfterInitialization(final String filePath,
+                                                                               final String name,
+                                                                               final Class<? extends Feature> featureType,
+                                                                               final int featureQueryLookahead) {
 
         final FeatureInput<? extends Feature> featureInput = new FeatureInput<>(filePath, name);
 
-        //Add datasource to the feature manager too so that it can be queried. Setting lookahead to 0 to avoid caching.
-        //Note: we are disabling lookahead here because of windowed queries that need to "look behind" as well.
+        //Add datasource to the feature manager too so that it can be queried. Setting lookahead to user's requested value.
         addFeatureInputsAfterInitialization(featureInput, featureType, featureQueryLookahead);
 
         return featureInput;
@@ -908,10 +908,11 @@ public abstract class GATKTool extends CommandLineProgram {
      * @param featureQueryLookahead look ahead this many bases during queries that produce cache misses
      * @return The {@link FeatureInput} used as the key for this data source.
      */
-    protected void addFeatureInputsAfterInitialization(final FeatureInput<? extends Feature> featureInput,
-                                                                                  final Class<? extends Feature> featureType, final int featureQueryLookahead) {
-        //Add datasource to the feature manager too so that it can be queried. Setting lookahead to 0 to avoid caching.
-        //Note: we are disabling lookahead here because of windowed queries that need to "look behind" as well.
+    public void addFeatureInputsAfterInitialization(final FeatureInput<? extends Feature> featureInput,
+                                                    final Class<? extends Feature> featureType,
+                                                    final int featureQueryLookahead) {
+        // Add datasource to the feature manager too so that it can be queried.
+        // Setting lookahead to user-requested value:
         features.addToFeatureSources(
                 featureQueryLookahead,
                 featureInput,

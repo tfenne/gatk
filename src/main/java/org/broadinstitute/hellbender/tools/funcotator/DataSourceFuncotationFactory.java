@@ -43,11 +43,27 @@ public abstract class DataSourceFuncotationFactory implements Closeable {
      * The backing data store as a FeatureInput to leverage tribble querying.  Can be {@code null} for non-locatable
      * funcotation factories.
      */
-    protected FeatureInput<? extends Feature> mainSourceFileAsFeatureInput;
+    protected final FeatureInput<? extends Feature> mainSourceFileAsFeatureInput;
 
     public FeatureInput<? extends Feature> getMainSourceFileAsFeatureInput() {
         return mainSourceFileAsFeatureInput;
     }
+
+    /**
+     * Constructor to initialize final fields in this class with defaults.
+     */
+    protected DataSourceFuncotationFactory() {
+        this.mainSourceFileAsFeatureInput = null;
+    }
+
+    /**
+     * Constructor to initialize final fields in this class.
+     * @param mainSourceFileAsFeatureInput The backing data store as a FeatureInput to leverage tribble querying.  Can be {@code null} for non-locatable funcotation factories.
+     */
+    protected DataSourceFuncotationFactory(final FeatureInput<? extends Feature> mainSourceFileAsFeatureInput) {
+        this.mainSourceFileAsFeatureInput = mainSourceFileAsFeatureInput;
+    }
+
 
     /**
      * Set values in {@link DataSourceFuncotationFactory#annotationOverrideMap} based on the given annotation override values

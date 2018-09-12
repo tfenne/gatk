@@ -5,10 +5,7 @@ import htsjdk.tribble.Feature;
 import htsjdk.variant.variantcontext.VariantContext;
 import org.apache.log4j.LogManager;
 import org.apache.log4j.Logger;
-import org.broadinstitute.hellbender.engine.FeatureContext;
-import org.broadinstitute.hellbender.engine.FeatureInput;
-import org.broadinstitute.hellbender.engine.ReadsContext;
-import org.broadinstitute.hellbender.engine.ReferenceContext;
+import org.broadinstitute.hellbender.engine.*;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.funcotator.DataSourceFuncotationFactory;
@@ -229,6 +226,7 @@ final public class DataSourceUtils {
      * @param annotationOverridesMap {@link LinkedHashMap} of {@link String}->{@link String} containing any annotation overrides to include in data sources.  Must not be {@code null}.
      * @param transcriptSelectionMode {@link TranscriptSelectionMode} to use when choosing the transcript for detailed reporting.  Must not be {@code null}.
      * @param userTranscriptIdSet {@link Set} of {@link String}s containing transcript IDs of interest to be selected for first.  Must not be {@code null}.
+     * @param funcotatorToolInstance Instance of the {@link Funcotator} {@link GATKTool} into which to add {@link FeatureInput}s.
      * @return A {@link List} of {@link DataSourceFuncotationFactory} given the data source metadata, overrides, and transcript reporting priority information.
      */
     public static List<DataSourceFuncotationFactory> createDataSourceFuncotationFactoriesForDataSources(final Map<Path, Properties> dataSourceMetaData,
@@ -243,11 +241,18 @@ final public class DataSourceUtils {
 
         final List<DataSourceFuncotationFactory> dataSourceFactories = new ArrayList<>(dataSourceMetaData.size());
 
+//        funcotatorToolInstance.addFeatureInputsAfterInitialization();
+//
+//        GATKTool::addFeatureInputsAfterInitialization(final String filePath,
+//        final String name,
+//        final Class<? extends Feature> featureType,
+//        final int featureQueryLookahead)
+
         // Now we know we have unique and valid data.
         // Now we must instantiate our data sources:
         for ( final Map.Entry<Path, Properties> entry : dataSourceMetaData.entrySet() ) {
 
-            final String funcotationFactoryName = entry.getValue().getProperty("name");
+            final String funcotationFactoryName = entry.getValue().getProperty(CONFIG_FILE_FIELD_NAME_NAME);
             logger.debug("Creating Funcotation Factory for " + funcotationFactoryName + " ...");
 
             final Path path = entry.getKey();
@@ -741,7 +746,6 @@ final public class DataSourceUtils {
      * @param name The name of this datasource.  Never {@code null}
      * @return a new instance of {@link FeatureInput} that can be used for querying.
      */
-    @VisibleForTesting
     public static FeatureInput<? extends Feature> createFeatureInput(final String mainSourceFilePath, final String name) {
         Utils.nonNull(mainSourceFilePath);
         Utils.nonNull(name);

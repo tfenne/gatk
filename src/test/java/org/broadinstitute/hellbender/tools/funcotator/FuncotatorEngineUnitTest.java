@@ -1,4 +1,4 @@
-package org.broadinstitute.hellbender.tools.funcotator.engine;
+package org.broadinstitute.hellbender.tools.funcotator;
 
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.vcf.VCFHeader;
@@ -9,9 +9,6 @@ import org.broadinstitute.hellbender.engine.ReferenceContext;
 import org.broadinstitute.hellbender.engine.ReferenceDataSource;
 import org.broadinstitute.hellbender.testutils.FuncotatorReferenceTestUtils;
 import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
-import org.broadinstitute.hellbender.tools.funcotator.FuncotationMap;
-import org.broadinstitute.hellbender.tools.funcotator.FuncotatorTestConstants;
-import org.broadinstitute.hellbender.tools.funcotator.TranscriptSelectionMode;
 import org.broadinstitute.hellbender.tools.funcotator.dataSources.DataSourceUtils;
 import org.broadinstitute.hellbender.tools.funcotator.metadata.VcfFuncotationMetadata;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
@@ -25,7 +22,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
 
-public class FuncotationEngineUnitTest extends GATKBaseTest {
+public class FuncotatorEngineUnitTest extends GATKBaseTest {
     final static private String INPUT_VCF = FuncotatorTestConstants.FUNCOTATOR_TEST_DIR + "/PIK3CA_SNPS_engine_test_chr3.vcf";
     private static final String DS_PIK3CA_DIR = largeFileTestDir + "funcotator" + File.separator + "small_ds_pik3ca" + File.separator;
     @DataProvider
@@ -36,13 +33,13 @@ public class FuncotationEngineUnitTest extends GATKBaseTest {
         };
     }
     @Test(dataProvider = "provideGt")
-    public void testSimpleFuncotation(final File vcfFile, final List<String> correspondingGeneName, final boolean[] hasClinvarHit) {
+    public void testGetFuncotationFactoriesAndCreateFuncotationMapForVariant(final File vcfFile, final List<String> correspondingGeneName, final boolean[] hasClinvarHit) {
 
         final Pair<VCFHeader, List<VariantContext>> entireVcf = VariantContextTestUtils.readEntireVCFIntoMemory(vcfFile.getAbsolutePath());
         final Map<Path, Properties> configData = DataSourceUtils.getAndValidateDataSourcesFromPaths("hg19", Collections.singletonList(DS_PIK3CA_DIR));
 
         // Create the metadata directly from the input.
-        final FuncotationEngine funcotationEngine = new FuncotationEngine(VcfFuncotationMetadata.create(
+        final FuncotatorEngine funcotatorEngine = new FuncotatorEngine(VcfFuncotationMetadata.create(
                 new ArrayList<>(entireVcf.getLeft().getInfoHeaderLines())),
                 DataSourceUtils.createDataSourceFuncotationFactoriesForDataSources(configData, new LinkedHashMap<>(),
                         TranscriptSelectionMode.CANONICAL, new HashSet<>()));
@@ -51,9 +48,9 @@ public class FuncotationEngineUnitTest extends GATKBaseTest {
             final VariantContext vc = entireVcf.getRight().get(i);
             final SimpleInterval variantInterval = new SimpleInterval(vc.getContig(), vc.getStart(), vc.getEnd());
             final ReferenceContext referenceContext = new ReferenceContext(ReferenceDataSource.of(Paths.get(FuncotatorReferenceTestUtils.retrieveHg19Chr3Ref())), variantInterval);
-            final FeatureContext featureContext = FuncotatorTestUtils.createFeatureContext(funcotationEngine.getDataSourceFactories(), "TEST", variantInterval,
+            final FeatureContext featureContext = FuncotatorTestUtils.createFeatureContext(funcotatorEngine.getFuncotationFactories(), "TEST", variantInterval,
                     0,0,0, null);
-            final FuncotationMap funcotationMap = funcotationEngine.createFuncotationMapForVariant(vc, referenceContext, featureContext);
+            final FuncotationMap funcotationMap = funcotatorEngine.createFuncotationMapForVariant(vc, referenceContext, featureContext);
 
             // Check that all of the transcripts at this location have the same gene name as the corresponding gene.
             //  The ground truth selected has the same gene name for all transcripts.

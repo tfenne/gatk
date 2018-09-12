@@ -99,6 +99,9 @@ public class VcfFuncotationFactory extends DataSourceFuncotationFactory {
 
     public VcfFuncotationFactory(final String name, final String version, final Path sourceFilePath, final LinkedHashMap<String, String> annotationOverridesMap,
                                  final FeatureInput<? extends Feature> mainSourceFileAsFeatureInput) {
+
+        super(mainSourceFileAsFeatureInput);
+
         this.name = name;
         this.version = version;
         this.sourceFilePath = sourceFilePath;
@@ -123,7 +126,6 @@ public class VcfFuncotationFactory extends DataSourceFuncotationFactory {
                 }
             }
         }
-        this.mainSourceFileAsFeatureInput = mainSourceFileAsFeatureInput;
     }
 
     private FuncotationMetadata createFuncotationMetadata(final Path sourceFilePath) {
