@@ -480,6 +480,22 @@ public class ReferenceConfidenceModel {
         return refModelDeletionQuality;
     }
 
+    /**
+     * log10 of the small integers that index the heterozygous genotype likelihoods. The het loop runs
+     * once per pileup element per locus, and for the usual ploidies its arguments are a handful of
+     * values (all of them 1 for diploid), so a table replaces a transcendental call per element.
+     */
+    private static final double[] LOG10_OF_INT = new double[64];
+    static {
+        for (int k = 0; k < LOG10_OF_INT.length; k++) {
+            LOG10_OF_INT[k] = Math.log10(k);
+        }
+    }
+
+    private static double log10OfInt(final int k) {
+        return k < LOG10_OF_INT.length ? LOG10_OF_INT[k] : Math.log10(k);
+    }
+
     private void applyPileupElementRefVsNonRefLikelihoodAndCount(final byte refBase, final int likelihoodCount, final double log10Ploidy, final RefVsAnyResult result, final PileupElement element, final byte qual, final MathUtils.RunningAverage hqSoftClips, final boolean readsWereRealigned) {
         applyPileupElementRefVsNonRefLikelihoodAndCount(refBase, likelihoodCount, log10Ploidy, result, element, qual, hqSoftClips, readsWereRealigned, 1.0);
     }
@@ -506,8 +522,8 @@ public class ReferenceConfidenceModel {
         for (int i = 1, j = likelihoodCount - 2; i < likelihoodCount - 1; i++, j--) {
             result.genotypeLikelihoods[i] +=
                     readWeight * MathUtils.approximateLog10SumLog10(
-                            referenceLikelihood + Math.log10(j),
-                            nonRefLikelihood + Math.log10(i));
+                            referenceLikelihood + log10OfInt(j),
+                            nonRefLikelihood + log10OfInt(i));
         }
         if (isAlt && hqSoftClips != null && element.isNextToSoftClip()) {
             hqSoftClips.add(AlignmentUtils.countHighQualitySoftClips(element.getRead(), HQ_BASE_QUALITY_SOFTCLIP_THRESHOLD));
