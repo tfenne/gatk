@@ -291,4 +291,51 @@ public final class BaseGraphUnitTest extends GATKBaseTest {
         final Set<SeqVertex> expectedSet = expected == null ? Collections.emptySet() : new HashSet<>(Arrays.asList(expected));
         Assert.assertEquals(actualSet, expectedSet);
     }
+
+    @Test
+    public void adjacencyQueriesRejectAVertexNotInTheGraphWithoutAddingIt() {
+        final SeqGraph g = new SeqGraph(11);
+        g.addVertex(new SeqVertex("A"));
+        final SeqVertex absent = new SeqVertex("C");
+        Assert.assertThrows(IllegalArgumentException.class, () -> g.outgoingEdgesOf(absent));
+        Assert.assertThrows(IllegalArgumentException.class, () -> g.incomingEdgesOf(absent));
+        Assert.assertThrows(IllegalArgumentException.class, () -> g.outDegreeOf(absent));
+        Assert.assertThrows(IllegalArgumentException.class, () -> g.inDegreeOf(absent));
+        Assert.assertFalse(g.containsVertex(absent));
+        Assert.assertEquals(g.vertexSet().size(), 1);
+    }
+
+    @Test
+    public void adjacencyQueriesRejectANullVertex() {
+        final SeqGraph g = new SeqGraph(11);
+        g.addVertex(new SeqVertex("A"));
+        Assert.assertThrows(NullPointerException.class, () -> g.outgoingEdgesOf(null));
+        Assert.assertThrows(NullPointerException.class, () -> g.incomingEdgesOf(null));
+        Assert.assertThrows(NullPointerException.class, () -> g.outDegreeOf(null));
+        Assert.assertThrows(NullPointerException.class, () -> g.inDegreeOf(null));
+    }
+
+    @Test
+    public void aVertexWithoutEdgesHasNoAdjacentEdges() {
+        final SeqGraph g = new SeqGraph(11);
+        final SeqVertex v = new SeqVertex("A");
+        g.addVertex(v);
+        Assert.assertTrue(g.outgoingEdgesOf(v).isEmpty());
+        Assert.assertTrue(g.incomingEdgesOf(v).isEmpty());
+        Assert.assertEquals(g.outDegreeOf(v), 0);
+        Assert.assertEquals(g.inDegreeOf(v), 0);
+    }
+
+    @Test
+    public void adjacencyOfAClonedGraphIsIndependentOfTheOriginal() {
+        final SeqGraph g = new SeqGraph(11);
+        final SeqVertex a = new SeqVertex("A");
+        final SeqVertex b = new SeqVertex("C");
+        g.addVertices(a, b);
+        final SeqGraph copy = g.clone();
+        copy.addEdge(a, b);
+        Assert.assertEquals(copy.outDegreeOf(a), 1);
+        Assert.assertEquals(g.outDegreeOf(a), 0);
+        Assert.assertEquals(g.inDegreeOf(b), 0);
+    }
 }

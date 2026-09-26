@@ -6,7 +6,9 @@ import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.jgrapht.EdgeFactory;
 import org.jgrapht.alg.CycleDetector;
+import org.jgrapht.graph.AbstractBaseGraph;
 import org.jgrapht.graph.DefaultDirectedGraph;
+import org.jgrapht.graph.specifics.DirectedEdgeContainer;
 import org.jgrapht.graph.specifics.DirectedSpecifics;
 import org.jgrapht.graph.specifics.Specifics;
 
@@ -24,6 +26,9 @@ import java.util.stream.Collectors;
 public abstract class BaseGraph<V extends BaseVertex, E extends BaseEdge> extends DefaultDirectedGraph<V, E> {
     private static final long serialVersionUID = 1l;
     protected final int kmerSize;
+
+    /** The specifics jgrapht stores this graph in, kept so adjacency queries can reach them directly. */
+    private AssemblyGraphSpecifics<V, E> assemblySpecifics;
 
     /**
      * Construct a TestGraph with kmerSize
@@ -44,14 +49,68 @@ public abstract class BaseGraph<V extends BaseVertex, E extends BaseEdge> extend
     }
 
     /**
-     * Uses the plain directed specifics rather than jgrapht's default fast-lookup variant, which keeps an extra map
+     * Uses plain directed specifics rather than jgrapht's default fast-lookup variant, which keeps an extra map
      * from every (source, target) pair to its edges and allocates a pair per lookup. Assembly graphs have few edges
      * per vertex, so scanning a vertex's outgoing edges is cheaper, and both keep vertices and edges in insertion
      * order. Assembly graphs are always directed.
+     *
+     * jgrapht's constructor and clone call this before this class's field initializers would run, so
+     * {@link #assemblySpecifics} has none.
      */
     @Override
     protected Specifics<V, E> createSpecifics(final boolean directed) {
-        return new DirectedSpecifics<>(this);
+        assemblySpecifics = new AssemblyGraphSpecifics<>(this);
+        return assemblySpecifics;
+    }
+
+    /**
+     * Directed specifics whose edge-container lookup rejects a vertex that is not in the graph, rather than adding
+     * it. That lets the adjacency queries below check membership and find the vertex's edges with one map lookup,
+     * where jgrapht's versions first assert membership with a separate lookup. A vertex is added with no container
+     * and gets one on first use, so only a vertex missing from the map is rejected.
+     */
+    private static final class AssemblyGraphSpecifics<V, E> extends DirectedSpecifics<V, E> {
+        private static final long serialVersionUID = 1L;
+
+        private AssemblyGraphSpecifics(final AbstractBaseGraph<V, E> graph) {
+            super(graph);
+        }
+
+        @Override
+        protected DirectedEdgeContainer<V, E> getEdgeContainer(final V vertex) {
+            final DirectedEdgeContainer<V, E> container = vertexMapDirected.get(vertex);
+            if (container != null) {
+                return container;
+            }
+            if (!vertexMapDirected.containsKey(vertex)) {
+                // The same exceptions as jgrapht's assertVertexExist.
+                if (vertex == null) {
+                    throw new NullPointerException();
+                }
+                throw new IllegalArgumentException("no such vertex in graph: " + vertex);
+            }
+            return super.getEdgeContainer(vertex);
+        }
+    }
+
+    @Override
+    public Set<E> outgoingEdgesOf(final V v) {
+        return assemblySpecifics.outgoingEdgesOf(v);
+    }
+
+    @Override
+    public Set<E> incomingEdgesOf(final V v) {
+        return assemblySpecifics.incomingEdgesOf(v);
+    }
+
+    @Override
+    public int outDegreeOf(final V v) {
+        return assemblySpecifics.outDegreeOf(v);
+    }
+
+    @Override
+    public int inDegreeOf(final V v) {
+        return assemblySpecifics.inDegreeOf(v);
     }
 
     /**
