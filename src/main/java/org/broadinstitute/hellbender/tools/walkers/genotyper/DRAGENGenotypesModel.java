@@ -1,5 +1,6 @@
 package org.broadinstitute.hellbender.tools.walkers.genotyper;
 
+import com.google.common.annotations.VisibleForTesting;
 import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.GenotypeLikelihoods;
 import org.broadinstitute.hellbender.exceptions.GATKException;
@@ -147,7 +148,7 @@ public class DRAGENGenotypesModel implements GenotypingModel {
             if (computeFRD) {
                 applyLikelihoodsAdjusmentToBaseline(ploidyModelGenotypeLikelihoods, "FRD",
                         GenotypeLikelihoodCalculatorDRAGEN.calculateFRDLikelihoods(samplePloidy, sampleLikelihoods, ploidyModelGenotypeLikelihoods,
-                                Stream.of(strandForward, strandReverse).flatMap(Collection::stream).collect(Collectors.toList()), // We filter out the HMM filtered reads as they do not apply to FRD
+                                Stream.of(strandForward, strandReverse).flatMap(Collection::stream).collect(Collectors.toList()), // HMM-filtered reads included: FRD does not genotype them but uses their mapping qualities
                                 FLAT_SNP_HET_PRIOR, api, maxEffectiveDepthAdjustment));
             }
 
@@ -183,11 +184,8 @@ public class DRAGENGenotypesModel implements GenotypingModel {
         final int unclippedEnd;
         final int indexInLikelihoodsObject;
 
-        // Transient value used to store thresholds for FRD
-       double phredPFValue = 0;
-
-
-        private DragenReadContainer(final GATKRead underlyingRead, final int offsetIntoReadForBaseQuality, final int unclippedEnd, final int indexInLikelihoodsObject) {
+        @VisibleForTesting
+        DragenReadContainer(final GATKRead underlyingRead, final int offsetIntoReadForBaseQuality, final int unclippedEnd, final int indexInLikelihoodsObject) {
             this.underlyingRead = underlyingRead;
             this.offsetIntoReadForBaseQuality = offsetIntoReadForBaseQuality;
             this.unclippedEnd = unclippedEnd;
@@ -224,14 +222,6 @@ public class DRAGENGenotypesModel implements GenotypingModel {
 
         public double getPhredScaledMappingQuality() {
             return DRAGENMappingQualityReadTransformer.mapMappingQualityToPhredLikelihoodScore(underlyingRead.getMappingQuality());
-        }
-
-        public double getPhredPFValue() {
-            return phredPFValue;
-        }
-
-        public void setPhredPFValue(double phredPFValue) {
-            this.phredPFValue = phredPFValue;
         }
 
         @Override
