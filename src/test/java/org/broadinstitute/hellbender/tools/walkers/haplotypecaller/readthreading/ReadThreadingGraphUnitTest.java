@@ -667,4 +667,79 @@ public final class ReadThreadingGraphUnitTest extends GATKBaseTest {
 
         return tests.toArray(new Object[][]{});
     }
+
+    private static List<String> nonUniqueKmers(final String sequence, final int kmerSize) {
+        final AbstractReadThreadingGraph.SequenceForKmers seq = new AbstractReadThreadingGraph.SequenceForKmers("seq", sequence.getBytes(), 0, sequence.length(), 1, false);
+        return ReadThreadingGraph.determineNonUniqueKmers(seq, kmerSize).stream().map(kmer -> new String(kmer.bases())).collect(Collectors.toList());
+    }
+
+    /** Every occurrence of a kmer after its first, in sequence order, computed directly on strings. */
+    private static List<String> repeatOccurrences(final String sequence, final int kmerSize) {
+        final Set<String> seen = new HashSet<>();
+        final List<String> repeats = new ArrayList<>();
+        for (int i = 0; i + kmerSize <= sequence.length(); i++) {
+            final String kmer = sequence.substring(i, i + kmerSize);
+            if (!seen.add(kmer)) {
+                repeats.add(kmer);
+            }
+        }
+        return repeats;
+    }
+
+    @Test
+    public void nonUniqueKmersListEachRepeatOccurrenceInSequenceOrder() {
+        Assert.assertEquals(nonUniqueKmers("ACGTAACGTAACGTA", 5), List.of("ACGTA", "CGTAA", "GTAAC", "TAACG", "AACGT", "ACGTA"));
+    }
+
+    @Test
+    public void nonUniqueKmersAreEmptyForAUniqueSequence() {
+        Assert.assertEquals(nonUniqueKmers("ACGTTGCAAGGCTTAC", 4), List.of());
+    }
+
+    @Test
+    public void nonUniqueKmersAreEmptyWhenTheSequenceIsShorterThanTheKmer() {
+        Assert.assertEquals(nonUniqueKmers("ACGTACG", 8), List.of());
+    }
+
+    @Test
+    public void nonUniqueKmersCompareKmersContainingNByTheirExactBases() {
+        Assert.assertEquals(nonUniqueKmers("ACNGTTACNGTT", 4), List.of("ACNG", "CNGT", "NGTT"));
+        Assert.assertEquals(nonUniqueKmers("ACNGTTACAGTT", 4), List.of());
+    }
+
+    @Test
+    public void nonUniqueKmersDistinguishLowerCaseFromUpperCaseBases() {
+        Assert.assertEquals(nonUniqueKmers("ACGTacgtACGT", 4), List.of("ACGT"));
+    }
+
+    @Test
+    public void nonUniqueKmersCompareAllThirtyTwoBasesOfAThirtyTwoBaseKmer() {
+        final String kmer = "ACGTTGCAAGGCTTACCATGGATCCTAGGACT";
+        final String differsInFirstBase = "C" + kmer.substring(1);
+        Assert.assertEquals(nonUniqueKmers(kmer + "T" + differsInFirstBase, 32), List.of());
+        Assert.assertEquals(nonUniqueKmers(kmer + "T" + kmer, 32), List.of(kmer));
+    }
+
+    @Test
+    public void nonUniqueKmersSupportKmersLongerThanThirtyTwoBases() {
+        final String kmer = "ACGTTGCAAGGCTTACCATGGATCCTAGGACTGATTACA";
+        Assert.assertEquals(nonUniqueKmers(kmer + "G" + kmer, kmer.length()), List.of(kmer));
+    }
+
+    @Test
+    public void nonUniqueKmersMatchADirectCountOnRandomLowComplexitySequences() {
+        final Random random = new Random(11);
+        final byte[] alphabet = "ACGTACGTACGTACGTNa".getBytes();
+        for (int trial = 0; trial < 500; trial++) {
+            final byte[] bases = new byte[1 + random.nextInt(300)];
+            final int alphabetSize = trial % 2 == 0 ? 2 : alphabet.length;
+            for (int i = 0; i < bases.length; i++) {
+                bases[i] = alphabet[random.nextInt(alphabetSize)];
+            }
+            final String sequence = new String(bases);
+            for (final int kmerSize : new int[]{1, 5, 10, 25, 31, 32, 33, 45}) {
+                Assert.assertEquals(nonUniqueKmers(sequence, kmerSize), repeatOccurrences(sequence, kmerSize), "k=" + kmerSize + " " + sequence);
+            }
+        }
+    }
 }
