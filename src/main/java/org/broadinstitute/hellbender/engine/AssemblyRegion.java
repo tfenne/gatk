@@ -320,12 +320,21 @@ public final class AssemblyRegion implements Locatable {
     }
 
     /**
-     * Remove all of the reads in readsToRemove from this region
-     * @param readsToRemove the set of reads we want to remove
+     * Remove all of the reads in readsToRemove from this region, preserving the order of the remaining reads.
+     *
+     * Reads are matched by identity: callers pass read objects obtained from this region's own list, and
+     * hashing every read's contents (as a value-based lookup would) costs more than the filtering it serves.
+     *
+     * @param readsToRemove the reads to remove; instances not present in this region are ignored
      */
     public void removeAll( final Collection<GATKRead> readsToRemove ) {
         Utils.nonNull(readsToRemove);
-        reads.removeAll(readsToRemove);
+        if ( readsToRemove.isEmpty() ) {
+            return;
+        }
+        final Set<GATKRead> toRemove = Collections.newSetFromMap(new IdentityHashMap<>(readsToRemove.size() * 2));
+        toRemove.addAll(readsToRemove);
+        reads.removeIf(toRemove::contains);
     }
 
     /**

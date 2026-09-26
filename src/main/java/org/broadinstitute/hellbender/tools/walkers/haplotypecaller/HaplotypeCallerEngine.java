@@ -1135,10 +1135,20 @@ public class HaplotypeCallerEngine implements AssemblyRegionEvaluator {
 
     }
 
-    protected Set<GATKRead> filterNonPassingReads( final AssemblyRegion activeRegion ) {
+    /**
+     * Removes from the region the reads that fail the post-assembly filters (too short, low mapping quality, mate on
+     * another contig, or outside the kept read group) and returns them.
+     *
+     * The removed reads are collected in a list, not a set: the region removes reads by identity, so every failing
+     * read object must reach it, including two equal records that are distinct objects.
+     *
+     * @param activeRegion the region to filter, which is modified
+     * @return the reads removed from the region, in region order
+     */
+    protected List<GATKRead> filterNonPassingReads( final AssemblyRegion activeRegion ) {
         // TODO: can we unify this additional filtering with makeStandardHCReadFilter()?
 
-        final Set<GATKRead> readsToRemove = new LinkedHashSet<>();
+        final List<GATKRead> readsToRemove = new ArrayList<>();
         for( final GATKRead rec : activeRegion.getReads() ) {
             if( AlignmentUtils.unclippedReadLength(rec) < READ_LENGTH_FILTER_THRESHOLD ||
                     rec.getMappingQuality() < hcArgs.mappingQualityThreshold ||
@@ -1163,8 +1173,15 @@ public class HaplotypeCallerEngine implements AssemblyRegionEvaluator {
         return hcArgs.emitReferenceConfidence != ReferenceConfidenceMode.NONE;
     }
 
+    /**
+     * Removes from the region every read whose sample is not the target sample. The reads are collected in a list so
+     * that every non-target read object reaches the region's identity-based removal.
+     *
+     * @param targetSample the sample whose reads are kept
+     * @param activeRegion the region to filter, which is modified
+     */
     protected void removeReadsFromAllSamplesExcept(final String targetSample, final AssemblyRegion activeRegion) {
-        final Set<GATKRead> readsToRemove = new LinkedHashSet<>();
+        final List<GATKRead> readsToRemove = new ArrayList<>();
         for( final GATKRead rec : activeRegion.getReads() ) {
             if( ! ReadUtils.getSampleName(rec, readsHeader).equals(targetSample) ) {
                 readsToRemove.add(rec);
