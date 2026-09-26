@@ -7,6 +7,8 @@ import org.broadinstitute.hellbender.utils.Utils;
 import org.jgrapht.EdgeFactory;
 import org.jgrapht.alg.CycleDetector;
 import org.jgrapht.graph.DefaultDirectedGraph;
+import org.jgrapht.graph.specifics.DirectedSpecifics;
+import org.jgrapht.graph.specifics.Specifics;
 
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -39,6 +41,17 @@ public abstract class BaseGraph<V extends BaseVertex, E extends BaseEdge> extend
      */
     public final int getKmerSize() {
         return kmerSize;
+    }
+
+    /**
+     * Uses the plain directed specifics rather than jgrapht's default fast-lookup variant, which keeps an extra map
+     * from every (source, target) pair to its edges and allocates a pair per lookup. Assembly graphs have few edges
+     * per vertex, so scanning a vertex's outgoing edges is cheaper, and both keep vertices and edges in insertion
+     * order. Assembly graphs are always directed.
+     */
+    @Override
+    protected Specifics<V, E> createSpecifics(final boolean directed) {
+        return new DirectedSpecifics<>(this);
     }
 
     /**
