@@ -689,6 +689,19 @@ public class HaplotypeCallerEngine implements AssemblyRegionEvaluator {
             if (hcArgs.pileupDetectionArgs.usePileupDetection) {
                 sample.getValue().getBasePileup().forEach(p -> PileupBasedAlleles.addMismatchPercentageToRead(p.getRead(), readsHeader, ref));
             }
+            // When only one sample has reads here and none of its counted elements is alt evidence, hom-ref has the
+            // highest likelihood, so the active probability is exactly zero (see
+            // AlleleFrequencyCalculator.calculateSingleSampleBiallelicNonRefPosterior) and computing the likelihoods
+            // can be skipped. That needs every counted non-alt base to favour the reference: log10(1 - e) > log10(e / 3)
+            // holds from base quality 2 up, and the quality filter only counts bases above minBaseQualityScore, hence
+            // the guard. The --flow-mode presets set minBaseQualityScore to 0, so flow runs never take this path.
+            if (splitContexts.size() == 1 && hcArgs.minBaseQualityScore >= 1
+                    && !referenceConfidenceModel.hasAltEvidenceBeforeAssembly(sample.getValue().getBasePileup(), ref.getBase(), hcArgs.minBaseQualityScore)) {
+                // Only alt elements contribute high-quality soft clips, so there are none to report.
+                final ActivityProfileState inactive = new ActivityProfileState(ref.getInterval(), 0.0, ActivityProfileState.Type.NONE, 0.0);
+                inactive.setOriginalActiveProb(0.0);
+                return inactive;
+            }
             // The ploidy here is not dictated by the sample but by the simple genotyping-engine used to determine whether regions are active or not.
             final int activeRegionDetectionHackishSamplePloidy = localActiveGenotypingEngine.getConfiguration().genotypeArgs.samplePloidy;
             final double[] genotypeLikelihoods = ((RefVsAnyResult) referenceConfidenceModel.calcGenotypeLikelihoodsOfRefVsAny(

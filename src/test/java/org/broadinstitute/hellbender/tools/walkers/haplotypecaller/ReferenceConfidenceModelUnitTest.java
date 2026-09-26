@@ -9,6 +9,7 @@ import htsjdk.variant.vcf.VCFHeaderLine;
 import htsjdk.variant.vcf.VCFSimpleHeaderLine;
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.tuple.Pair;
+import org.broadinstitute.hellbender.engine.AlignmentContext;
 import org.broadinstitute.hellbender.engine.AssemblyRegion;
 import org.broadinstitute.hellbender.tools.walkers.genotyper.GenotypingModel;
 import org.broadinstitute.hellbender.tools.walkers.genotyper.HomogeneousPloidyModel;
@@ -19,10 +20,12 @@ import org.broadinstitute.hellbender.utils.GenomeLocParser;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.clipping.ReadClipper;
+import org.broadinstitute.hellbender.utils.downsampling.DownsamplingMethod;
 import org.broadinstitute.hellbender.utils.genotyper.AlleleLikelihoods;
 import org.broadinstitute.hellbender.utils.genotyper.IndexedAlleleList;
 import org.broadinstitute.hellbender.utils.genotyper.SampleList;
 import org.broadinstitute.hellbender.utils.haplotype.Haplotype;
+import org.broadinstitute.hellbender.utils.locusiterator.LocusIteratorByState;
 import org.broadinstitute.hellbender.utils.pileup.PileupElement;
 import org.broadinstitute.hellbender.utils.pileup.ReadPileup;
 import org.broadinstitute.hellbender.utils.read.ArtificialReadUtils;
@@ -38,6 +41,7 @@ import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
+import java.io.ByteArrayOutputStream;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -882,4 +886,191 @@ public final class ReferenceConfidenceModelUnitTest extends GATKBaseTest {
         checkReferenceModelResult(data, contexts, expectedDPs, calls);
     }
 
+    private static final int PILEUP_OFFSET = 5;
+    private static final byte PILEUP_REF_BASE = 'A';
+
+    /** A pileup at one site over reads whose base there is {@code bases[i]} with quality {@code quals[i]}; every other base matches. */
+    private ReadPileup pileupOfBases(final byte[] bases, final byte[] quals) {
+        final List<GATKRead> reads = new ArrayList<>();
+        for (int i = 0; i < bases.length; i++) {
+            final byte[] readBases = Strings.repeat("A", 11).getBytes();
+            final byte[] readQuals = Utils.dupBytes((byte) 30, 11);
+            readBases[PILEUP_OFFSET] = bases[i];
+            readQuals[PILEUP_OFFSET] = quals[i];
+            reads.add(ArtificialReadUtils.createArtificialRead(header, "read" + i, 0, 100, readBases, readQuals, "11M"));
+        }
+        return new ReadPileup(new SimpleInterval("1", 100 + PILEUP_OFFSET, 100 + PILEUP_OFFSET), reads, PILEUP_OFFSET);
+    }
+
+    @Test
+    public void referenceBasesAreNotAltEvidence() {
+        final ReadPileup pileup = pileupOfBases("AAAA".getBytes(), new byte[]{30, 20, 11, 40});
+        Assert.assertFalse(model.hasAltEvidenceBeforeAssembly(pileup, PILEUP_REF_BASE, (byte) 10));
+    }
+
+    @Test
+    public void aMismatchAboveTheMinimumBaseQualityIsAltEvidence() {
+        final ReadPileup pileup = pileupOfBases("AACA".getBytes(), new byte[]{30, 30, 11, 30});
+        Assert.assertTrue(model.hasAltEvidenceBeforeAssembly(pileup, PILEUP_REF_BASE, (byte) 10));
+    }
+
+    @Test
+    public void aMismatchAtOrBelowTheMinimumBaseQualityIsNotAltEvidence() {
+        final ReadPileup pileup = pileupOfBases("ACGA".getBytes(), new byte[]{30, 10, 5, 30});
+        Assert.assertFalse(model.hasAltEvidenceBeforeAssembly(pileup, PILEUP_REF_BASE, (byte) 10));
+    }
+
+    @Test
+    public void anEmptyPileupHasNoAltEvidence() {
+        final ReadPileup pileup = pileupOfBases(new byte[0], new byte[0]);
+        Assert.assertFalse(model.hasAltEvidenceBeforeAssembly(pileup, PILEUP_REF_BASE, (byte) 10));
+    }
+
+    @Test
+    public void withoutAltEvidenceHomRefIsTheMostLikelyGenotype() {
+        final Random random = new Random(3);
+        final byte[] mismatches = "CGTN".getBytes();
+        for (int trial = 0; trial < 2000; trial++) {
+            final byte minBaseQual = (byte) (1 + random.nextInt(30));
+            final int depth = random.nextInt(120);
+            final byte[] bases = new byte[depth];
+            final byte[] quals = new byte[depth];
+            for (int i = 0; i < depth; i++) {
+                quals[i] = (byte) random.nextInt(45);
+                // Mismatches only where they are not counted, so the pileup never has alt evidence.
+                bases[i] = quals[i] <= minBaseQual && random.nextBoolean() ? mismatches[random.nextInt(mismatches.length)] : PILEUP_REF_BASE;
+            }
+            final ReadPileup pileup = pileupOfBases(bases, quals);
+            Assert.assertFalse(model.hasAltEvidenceBeforeAssembly(pileup, PILEUP_REF_BASE, minBaseQual));
+            for (int ploidy = 1; ploidy <= 4; ploidy++) {
+                final double[] likelihoods = ((RefVsAnyResult) model.calcGenotypeLikelihoodsOfRefVsAny(ploidy, pileup, PILEUP_REF_BASE, minBaseQual, null, false)).genotypeLikelihoods;
+                for (int g = 1; g < likelihoods.length; g++) {
+                    Assert.assertTrue(likelihoods[0] >= likelihoods[g], "trial " + trial + " ploidy " + ploidy + ": " + Arrays.toString(likelihoods));
+                }
+            }
+        }
+    }
+
+    @Test
+    public void aReferenceBaseOfQualityOneFavoursNonReferenceGenotypes() {
+        // Why isActive's shortcut needs a minimum base quality of at least 1: with 0, a counted reference base of
+        // quality 1 is not alt evidence, yet it makes the heterozygous genotype more likely than hom-ref.
+        final ReadPileup pileup = pileupOfBases("A".getBytes(), new byte[]{1});
+        Assert.assertFalse(model.hasAltEvidenceBeforeAssembly(pileup, PILEUP_REF_BASE, (byte) 0));
+        final double[] likelihoods = ((RefVsAnyResult) model.calcGenotypeLikelihoodsOfRefVsAny(2, pileup, PILEUP_REF_BASE, (byte) 0, null, false)).genotypeLikelihoods;
+        Assert.assertTrue(likelihoods[1] > likelihoods[0], Arrays.toString(likelihoods));
+    }
+
+    @Test
+    public void altEvidenceAgreesWithTheNonReferenceDepthOfTheLikelihoods() {
+        assertAltEvidenceAgreesWithNonReferenceDepth(new ReferenceConfidenceModel(samples, header, 10, -1, (byte) 30, true, false));
+    }
+
+    @Test
+    public void altEvidenceAgreesWithTheNonReferenceDepthOfTheLikelihoodsInFlowMode() {
+        assertAltEvidenceAgreesWithNonReferenceDepth(new ReferenceConfidenceModel(samples, header, 10, -1, (byte) 30, true, true));
+    }
+
+    /**
+     * Over the pileups of random reads with mismatches, Ns, insertions, deletions and soft clips, and a range of
+     * minimum base qualities, hasAltEvidenceBeforeAssembly is true exactly where the pre-assembly likelihoods count a
+     * non-reference element.
+     */
+    private void assertAltEvidenceAgreesWithNonReferenceDepth(final ReferenceConfidenceModel referenceConfidenceModel) {
+        final Random random = new Random(11);
+        final byte[] reference = randomBases(random, 400);
+        int sitesWithAlt = 0;
+        int sitesWithoutAlt = 0;
+        for (int trial = 0; trial < 20; trial++) {
+            final List<GATKRead> reads = randomReads(random, reference, 60);
+            final LocusIteratorByState pileups = new LocusIteratorByState(reads.iterator(), DownsamplingMethod.NONE, List.of(sample), header, true);
+            while (pileups.hasNext()) {
+                final AlignmentContext context = pileups.next();
+                final byte refBase = reference[context.getStart() - 1];
+                final ReadPileup pileup = context.getBasePileup();
+                for (final byte minBaseQual : new byte[]{0, 1, 10, 20}) {
+                    final boolean hasAlt = referenceConfidenceModel.hasAltEvidenceBeforeAssembly(pileup, refBase, minBaseQual);
+                    final ReferenceConfidenceResult result = referenceConfidenceModel.calcGenotypeLikelihoodsOfRefVsAny(2, pileup, refBase, minBaseQual, null, false);
+                    Assert.assertEquals(hasAlt, result.nonRefDepth > 0, "at " + context.getStart() + " with minimum base quality " + minBaseQual);
+                    if (hasAlt) {
+                        sitesWithAlt++;
+                    } else {
+                        sitesWithoutAlt++;
+                    }
+                }
+            }
+        }
+        // Both outcomes must be common for the agreement to mean anything.
+        Assert.assertTrue(sitesWithAlt > 100 && sitesWithoutAlt > 100, sitesWithAlt + " with alt evidence, " + sitesWithoutAlt + " without");
+    }
+
+    private static byte[] randomBases(final Random random, final int length) {
+        final byte[] bases = new byte[length];
+        for (int i = 0; i < length; i++) {
+            bases[i] = "ACGT".getBytes()[random.nextInt(4)];
+        }
+        return bases;
+    }
+
+    private static byte mismatchedBase(final Random random, final byte base) {
+        final byte[] others = "ACGT".replace(String.valueOf((char) base), "").getBytes();
+        return others[random.nextInt(others.length)];
+    }
+
+    /**
+     * Reads sorted by start, each aligned along {@code reference} as four matched segments separated by optional 1-3
+     * base insertions or deletions, with up to 3 soft-clipped bases at each end, 1 in 20 matched bases an N and 1 in
+     * 20 a mismatch, and random base qualities from 0 to 40.
+     */
+    private List<GATKRead> randomReads(final Random random, final byte[] reference, final int count) {
+        final List<GATKRead> reads = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            final int start = 1 + random.nextInt(reference.length - 100);
+            final StringBuilder cigar = new StringBuilder();
+            final ByteArrayOutputStream bases = new ByteArrayOutputStream();
+            final int leadingClip = random.nextInt(4);
+            if (leadingClip > 0) {
+                cigar.append(leadingClip).append('S');
+                bases.writeBytes(randomBases(random, leadingClip));
+            }
+            int refIndex = start - 1;
+            int matched = 0;
+            for (int segment = 0; segment < 4; segment++) {
+                final int length = 3 + random.nextInt(8);
+                for (int j = 0; j < length; j++) {
+                    final byte refBase = reference[refIndex++];
+                    final int roll = random.nextInt(20);
+                    bases.write(roll == 0 ? 'N' : roll == 1 ? mismatchedBase(random, refBase) : refBase);
+                }
+                matched += length;
+                final int indel = segment < 3 ? random.nextInt(3) : 0;
+                if (indel > 0) {
+                    final int indelLength = 1 + random.nextInt(3);
+                    cigar.append(matched).append('M').append(indelLength).append(indel == 1 ? 'D' : 'I');
+                    if (indel == 1) {
+                        refIndex += indelLength;
+                    } else {
+                        bases.writeBytes(randomBases(random, indelLength));
+                    }
+                    matched = 0;
+                }
+            }
+            cigar.append(matched).append('M');
+            final int trailingClip = random.nextInt(4);
+            if (trailingClip > 0) {
+                cigar.append(trailingClip).append('S');
+                bases.writeBytes(randomBases(random, trailingClip));
+            }
+            final byte[] readBases = bases.toByteArray();
+            final byte[] quals = new byte[readBases.length];
+            for (int j = 0; j < quals.length; j++) {
+                quals[j] = (byte) random.nextInt(41);
+            }
+            final GATKRead read = ArtificialReadUtils.createArtificialRead(header, "read" + i, 0, start, readBases, quals, cigar.toString());
+            read.setReadGroup(RGID);
+            reads.add(read);
+        }
+        reads.sort(Comparator.comparingInt(GATKRead::getStart));
+        return reads;
+    }
 }
