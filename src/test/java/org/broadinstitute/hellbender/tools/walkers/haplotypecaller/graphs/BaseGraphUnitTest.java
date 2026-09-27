@@ -475,4 +475,30 @@ public final class BaseGraphUnitTest extends GATKBaseTest {
         Assert.assertSame(g.getEdgeTarget(duplicate), c);
         Assert.assertSame(g.getEdgeTarget(e), b);
     }
+
+    @Test
+    public void sequenceGraphKeepsEveryEdgeOnceInInsertionOrder() {
+        final SeqGraph source = new SeqGraph(11);
+        final SeqVertex a = new SeqVertex("A"), c = new SeqVertex("C"), g = new SeqVertex("G"), t = new SeqVertex("T");
+        source.addVertices(a, c, g, t);
+        source.addEdge(a, c, new BaseEdge(true, 3));
+        source.addEdge(c, g, new BaseEdge(true, 2));
+        source.addEdge(a, g, new BaseEdge(false, 1));
+        source.addEdge(g, g, new BaseEdge(false, 5));
+        source.addEdge(g, t, new BaseEdge(false, 4));
+
+        final SeqGraph seqGraph = source.toSequenceGraph();
+
+        Assert.assertEquals(seqGraph.vertexSet().size(), 4);
+        Assert.assertEquals(seqGraph.edgeSet().size(), 5);
+        final List<String> edges = new ArrayList<>();
+        for (final BaseEdge e : seqGraph.edgeSet()) {
+            edges.add(seqGraph.getEdgeSource(e).getSequenceString() + ">" + seqGraph.getEdgeTarget(e).getSequenceString()
+                    + ":" + e.getMultiplicity() + (e.isRef() ? "r" : ""));
+        }
+        Assert.assertEquals(edges, Arrays.asList("A>C:3r", "C>G:2r", "A>G:1", "G>G:5", "G>T:4"));
+        for (final BaseEdge e : seqGraph.edgeSet()) {
+            Assert.assertFalse(source.containsEdge(e), "sequence graph edges are copies");
+        }
+    }
 }

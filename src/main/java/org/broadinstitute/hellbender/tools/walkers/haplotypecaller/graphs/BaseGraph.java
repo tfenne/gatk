@@ -254,11 +254,13 @@ public abstract class BaseGraph<V extends BaseVertex, E extends BaseEdge> extend
             seqGraph.addVertex(sv);
         }
 
-        // walk through the nodes and connect them to their equivalent seq vertices
+        // walk through the nodes and connect them to their equivalent seq vertices. This graph has no parallel
+        // edges and every sequence vertex was created above for exactly one vertex here, so no copied edge can
+        // duplicate another: the copies are added without a duplicate-edge search.
         for( final E e : edgeSet() ) {
             final SeqVertex seqInV = vertexMap.get(getEdgeSource(e));
             final SeqVertex seqOutV = vertexMap.get(getEdgeTarget(e));
-            seqGraph.addEdge(seqInV, seqOutV, e.copy());
+            seqGraph.addEdgeWhereNoneExists(seqInV, seqOutV, e.copy());
         }
 
         return seqGraph;
