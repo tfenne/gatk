@@ -3,12 +3,17 @@ package org.broadinstitute.hellbender.tools.walkers.mutect;
 import htsjdk.samtools.SAMFileHeader;
 import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.GenotypeBuilder;
+import org.broadinstitute.hellbender.engine.AssemblyRegion;
+import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.AssemblyBasedCallerUtils;
 import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.ReferenceConfidenceModel;
 import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.ReferenceConfidenceResult;
 import org.broadinstitute.hellbender.tools.walkers.readorientation.BetaDistributionShape;
 import org.broadinstitute.hellbender.utils.MathUtils;
+import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
+import org.broadinstitute.hellbender.utils.genotyper.AlleleLikelihoods;
 import org.broadinstitute.hellbender.utils.genotyper.SampleList;
+import org.broadinstitute.hellbender.utils.haplotype.Haplotype;
 import org.broadinstitute.hellbender.utils.pileup.PileupElement;
 import org.broadinstitute.hellbender.utils.pileup.ReadPileup;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
@@ -96,18 +101,25 @@ public class SomaticReferenceConfidenceModel extends ReferenceConfidenceModel {
         gb.attribute(GATKVCFConstants.TUMOR_LOG_10_ODDS_KEY, MathUtils.logToLog10(((SomaticRefVsAnyResult)result).lods.get(Allele.NON_REF_ALLELE)));
     }
 
+    /**
+     * Evaluates each position from its pileup. The somatic model rates the SNP evidence alone: the germline indel
+     * model counts reads that rule out indels of up to 10bp and folds a constant-quality diploid indel likelihood into
+     * the site, which does not represent low allele fraction variants or PCR errors well, and the first use of this
+     * model is mitochondrial calling, where the high-complexity reference lets the SNP model dominate.
+     */
     @Override
-    public void doIndelRefConfCalc(final int ploidy, final byte[] ref, final ReadPileup pileup, final int refOffset, final ReferenceConfidenceResult homRefCalc) {
-        //NOTE:
-        // For germline we evaluate the alternative indel reference confidence model, compare with the SNP ref conf
-        // model results, and return the less confident likelihoods. The existing indel model finds the number of reads
-        // spanning the current position that are informative for indels of size [-10, 10]bp and calculates a diploid
-        // genotype likelihood with a constant indel "quality" and up to 40 informative reads. I'm not convinced that
-        // low allele fraction variants or errors derived from PCR error are well represented in that model.
-        // Additionally, the first application of this somatic ref conf is for mitochondrial calling. The MT reference
-        // is quite high complexity so the SNP model should dominate. Until we develop a better model for somatic
-        // indels, we will rely on the SNP model for all applications and this method (which is called by the parent class)
-        // will be a noop.
+    protected List<ReferenceConfidenceResult> calculateSiteResults(final AlleleLikelihoods<GATKRead, Haplotype> readLikelihoods,
+                                                                   final AssemblyRegion activeRegion,
+                                                                   final byte[] ref,
+                                                                   final int ploidy) {
+        final SimpleInterval span = activeRegion.getSpan();
+        final int globalRefOffset = span.getStart() - activeRegion.getPaddedSpan().getStart();
+        final List<ReadPileup> pileups = AssemblyBasedCallerUtils.getPileupsOverReference(activeRegion.getHeader(), span, readLikelihoods, samples);
+        final List<ReferenceConfidenceResult> results = new ArrayList<>(pileups.size());
+        for (int i = 0; i < pileups.size(); i++) {
+            results.add(calcGenotypeLikelihoodsOfRefVsAny(ploidy, pileups.get(i), ref[i + globalRefOffset], BASE_QUAL_THRESHOLD, null, true));
+        }
+        return results;
     }
 
 }

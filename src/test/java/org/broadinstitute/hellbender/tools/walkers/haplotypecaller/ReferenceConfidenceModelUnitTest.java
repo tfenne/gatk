@@ -16,6 +16,8 @@ import org.broadinstitute.hellbender.tools.walkers.genotyper.IndependentSampleGe
 import org.broadinstitute.hellbender.tools.walkers.genotyper.PloidyModel;
 import org.broadinstitute.hellbender.utils.GenomeLoc;
 import org.broadinstitute.hellbender.utils.GenomeLocParser;
+import org.broadinstitute.hellbender.utils.MathUtils;
+import org.broadinstitute.hellbender.utils.QualityUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.clipping.ReadClipper;
@@ -325,26 +327,142 @@ public final class ReferenceConfidenceModelUnitTest extends GATKBaseTest {
     }
 
     @Test(dataProvider = "CalcNIndelInformativeReadsData")
-    public void testCalcNIndelInformativeReads(final String readBases, final String cigar, final byte[] readQuals, final String ref, final int maxIndelSize, final int readStartIntoRef, final List<Integer> expected ) {
+    public void testIndelInformativeBases(final String readBases, final String cigar, final byte[] readQuals, final String ref, final int maxIndelSize, final int readStartIntoRef, final List<Integer> expected ) {
         final byte qual = (byte)30;
         final byte[] quals = readQuals != null ? readQuals : Utils.dupBytes(qual, readBases.length());
-        // on the same read after the first site the result will be cached in the transient attributes, assert the results are the same as those calculated non-transiently.
-        final GATKRead readCache = ArtificialReadUtils.createArtificialRead(readBases.getBytes(), quals, cigar);
+        final GATKRead read = ArtificialReadUtils.createArtificialRead(readBases.getBytes(), quals, cigar);
+        // the bitset computed at the read's first informative base must serve every later base of the read
+        BitSet anchoredAtFirstBase = null;
 
         for ( int i = 0; i < readBases.getBytes().length; i++ ) {
-            final Pair<Integer, CigarOperator> readCoordinateForReferenceCoordinate = ReadUtils.getReadIndexForReferenceCoordinate(readCache, readCache.getStart() + i);
+            final Pair<Integer, CigarOperator> readCoordinateForReferenceCoordinate = ReadUtils.getReadIndexForReferenceCoordinate(read, read.getStart() + i);
 
             if (readCoordinateForReferenceCoordinate.getRight() != null && readCoordinateForReferenceCoordinate.getRight().consumesReadBases()) {
-                final GATKRead readNoCache = ArtificialReadUtils.createArtificialRead(readBases.getBytes(), quals, cigar);
-                final SimpleInterval loc = new SimpleInterval("20", i + 1 + readStartIntoRef, i + 1 + readStartIntoRef);
-                final ReadPileup pileupCache = new ReadPileup(loc, Collections.singletonList(readCache), readCoordinateForReferenceCoordinate.getLeft());
-                final ReadPileup pileupNoCache = new ReadPileup(loc, Collections.singletonList(readNoCache), ReadUtils.getReadIndexForReferenceCoordinate(readNoCache, readNoCache.getStart() + i).getKey());
-                final int actualCache = model.calcNReadsWithNoPlausibleIndelsReads(pileupCache, i + readStartIntoRef, ref.getBytes(), maxIndelSize);
-                final int actualNoCache = model.calcNReadsWithNoPlausibleIndelsReads(pileupNoCache, i + readStartIntoRef, ref.getBytes(), maxIndelSize);
-                Assert.assertEquals(actualCache, (int)expected.get(i), "cached result failed at position " + i);
-                Assert.assertEquals(actualNoCache, (int)expected.get(i), "non-cached result failed at position " + i);
+                final PileupElement element = PileupElement.createPileupForReadAndOffset(read, readCoordinateForReferenceCoordinate.getLeft());
+                final boolean skipped = element.isBeforeDeletionStart() || element.isBeforeInsertion() || element.isDeletion();
+                final int alignedOffset = ReferenceConfidenceTestUtils.referenceAlignedOffset(element);
+                final int refOffset = i + readStartIntoRef;
+                final BitSet anchoredHere = ReferenceConfidenceModel.indelInformativeBases(read, alignedOffset, ref.getBytes(), refOffset, maxIndelSize);
+                if (!skipped && anchoredAtFirstBase == null) {
+                    anchoredAtFirstBase = anchoredHere;
+                }
+                final int actualAnchoredHere = !skipped && anchoredHere.get(alignedOffset) ? 1 : 0;
+                Assert.assertEquals(actualAnchoredHere, (int)expected.get(i), "result anchored at position " + i + " failed");
+                if (!skipped) {
+                    final int actualAnchoredAtFirstBase = anchoredAtFirstBase.get(alignedOffset) ? 1 : 0;
+                    Assert.assertEquals(actualAnchoredAtFirstBase, (int)expected.get(i), "result anchored at the first base failed at position " + i);
+                }
             }
         }
+    }
+
+    private static double[] directIncrements(final int ploidy, final boolean isAlt, final byte qual) {
+        final int likelihoodCount = ploidy + 1;
+        final double log10Ploidy = Math.log10(ploidy);
+        final double referenceLikelihood = isAlt ? QualityUtils.qualToErrorProbLog10(qual) + MathUtils.LOG10_ONE_THIRD : QualityUtils.qualToProbLog10(qual);
+        final double nonRefLikelihood = isAlt ? QualityUtils.qualToProbLog10(qual) : QualityUtils.qualToErrorProbLog10(qual) + MathUtils.LOG10_ONE_THIRD;
+        final double[] increments = new double[likelihoodCount];
+        increments[0] = referenceLikelihood + log10Ploidy;
+        increments[likelihoodCount - 1] = nonRefLikelihood + log10Ploidy;
+        for (int i = 1, j = likelihoodCount - 2; i < likelihoodCount - 1; i++, j--) {
+            increments[i] = MathUtils.approximateLog10SumLog10(referenceLikelihood + Math.log10(j), nonRefLikelihood + Math.log10(i));
+        }
+        return increments;
+    }
+
+    private static void assertBitIdentical(final double[] actual, final double[] expected, final String label) {
+        Assert.assertEquals(actual.length, expected.length, label);
+        for (int k = 0; k < actual.length; k++) {
+            Assert.assertEquals(Double.doubleToLongBits(actual[k]), Double.doubleToLongBits(expected[k]), label + " likelihood " + k + ": " + actual[k] + " vs " + expected[k]);
+        }
+    }
+
+    @Test
+    public void refVsAnyLikelihoodsEqualTheDirectPerElementAccumulation() {
+        final Random rng = new Random(11);
+        for (final int ploidy : Arrays.asList(1, 2, 3, 4)) {
+            for (int trial = 0; trial < 50; trial++) {
+                final int depth = 1 + rng.nextInt(40);
+                final List<GATKRead> reads = new ArrayList<>();
+                final byte[] quals = new byte[depth];
+                final byte[] bases = new byte[depth];
+                for (int i = 0; i < depth; i++) {
+                    quals[i] = (byte) rng.nextInt(60);
+                    bases[i] = (byte) (rng.nextInt(3) == 0 ? 'C' : 'A');
+                    final GATKRead read = ArtificialReadUtils.createArtificialRead(header, "read" + i, 0, 100, new byte[]{bases[i]}, new byte[]{quals[i]}, "1M");
+                    read.setReadGroup(rg.getId());
+                    reads.add(read);
+                }
+                final ReadPileup pileup = new ReadPileup(new SimpleInterval("1", 100, 100), reads, 0);
+                final RefVsAnyResult actual = (RefVsAnyResult) model.calcGenotypeLikelihoodsOfRefVsAny(ploidy, pileup, (byte) 'A', (byte) 6, null, true);
+
+                final double[] expected = new double[ploidy + 1];
+                int counted = 0;
+                for (int i = 0; i < depth; i++) {
+                    if (quals[i] <= 6) {
+                        continue;
+                    }
+                    counted++;
+                    final double[] increments = directIncrements(ploidy, bases[i] != 'A', quals[i]);
+                    for (int k = 0; k <= ploidy; k++) {
+                        expected[k] += increments[k];
+                    }
+                }
+                for (int k = 0; k <= ploidy; k++) {
+                    expected[k] -= counted * Math.log10(ploidy);
+                }
+                assertBitIdentical(actual.genotypeLikelihoods, expected, "ploidy " + ploidy + " trial " + trial);
+            }
+        }
+    }
+
+    @Test
+    public void likelihoodIncrementTableEqualsTheDirectExpressionsForEveryQuality() {
+        for (final int ploidy : Arrays.asList(1, 2, 3, 4)) {
+            final double[][][] table = ReferenceConfidenceModel.likelihoodIncrements(ploidy);
+            for (int alt = 0; alt < 2; alt++) {
+                Assert.assertEquals(table[alt].length, QualityUtils.MAX_QUAL + 1);
+                for (int qual = 0; qual <= QualityUtils.MAX_QUAL; qual++) {
+                    assertBitIdentical(table[alt][qual], directIncrements(ploidy, alt == 1, (byte) qual), "ploidy " + ploidy + " alt " + alt + " qual " + qual);
+                }
+            }
+        }
+    }
+
+    @Test
+    public void deletionQualityAbove127IsLookedUpAsAnUnsignedQuality() {
+        final byte deletionQuality = (byte) 200;
+        final ReferenceConfidenceModel highDeletionQualityModel = new ReferenceConfidenceModel(samples, header, 10, -1, deletionQuality, true, false);
+        final GATKRead read = ArtificialReadUtils.createArtificialRead(header, "del", 0, 100, "AAAAAAAAAA".getBytes(), Utils.dupBytes((byte) 30, 10), "5M3D5M");
+        read.setReadGroup(rg.getId());
+        final PileupElement deletion = new PileupElement(read, 4, read.getCigarElement(1), 1, 0);
+        final ReadPileup pileup = new ReadPileup(new SimpleInterval("1", 105, 105), Collections.singletonList(deletion));
+        final RefVsAnyResult actual = (RefVsAnyResult) highDeletionQualityModel.calcGenotypeLikelihoodsOfRefVsAny(2, pileup, (byte) 'A', (byte) 6, null, true);
+        final double[] expected = directIncrements(2, true, deletionQuality);
+        for (int k = 0; k < expected.length; k++) {
+            expected[k] -= Math.log10(2);
+        }
+        assertBitIdentical(actual.genotypeLikelihoods, expected, "deletion quality 200");
+    }
+
+    @Test
+    public void altReadWeightScalesOnlyTheAltElements() {
+        final List<GATKRead> reads = new ArrayList<>();
+        for (int i = 0; i < 4; i++) {
+            final GATKRead read = ArtificialReadUtils.createArtificialRead(header, "read" + i, 0, 100, new byte[]{(byte) (i < 2 ? 'A' : 'C')}, new byte[]{30}, "1M");
+            read.setReadGroup(rg.getId());
+            reads.add(read);
+        }
+        final ReadPileup pileup = new ReadPileup(new SimpleInterval("1", 100, 100), reads, 0);
+        final double weight = 0.25;
+        final RefVsAnyResult actual = (RefVsAnyResult) model.calcGenotypeLikelihoodsOfRefVsAny(2, pileup, (byte) 'A', (byte) 6, null, false, weight);
+        final double[] refIncrements = directIncrements(2, false, (byte) 30);
+        final double[] altIncrements = directIncrements(2, true, (byte) 30);
+        final double[] expected = new double[3];
+        for (int k = 0; k < 3; k++) {
+            expected[k] = refIncrements[k] + refIncrements[k] + weight * altIncrements[k] + weight * altIncrements[k] - 4 * Math.log10(2);
+        }
+        assertBitIdentical(actual.genotypeLikelihoods, expected, "weighted");
     }
 
     @Test
@@ -436,7 +554,7 @@ public final class ReferenceConfidenceModelUnitTest extends GATKBaseTest {
 
         final GATKRead read = ArtificialReadUtils.createArtificialRead(readBases.getBytes(), quals, cigar);
         final PileupElement pe = PileupElement.createPileupForReadAndOffset(read, pileupOffset);
-        final int newOffset = model.getCigarModifiedOffset(pe);
+        final int newOffset = ReferenceConfidenceTestUtils.referenceAlignedOffset(pe);
         Assert.assertEquals(newOffset, expectedNewOffset);
     }
 
@@ -551,10 +669,6 @@ public final class ReferenceConfidenceModelUnitTest extends GATKBaseTest {
         final GenotypingModel genotypingModel = new IndependentSampleGenotypesModel();
         final List<Integer> expectedDPs = Collections.nCopies(data.getActiveRegion().getSpan().size(), nReads);
         final List<VariantContext> contexts = model.calculateRefConfidence(data.getRefHap(), haplotypes, data.getPaddedRefLoc(), data.getActiveRegion(), likelihoods, ploidyModel, calls, false, Collections.emptyList());
-        // Asserting that none of the reads after calculateRefConfidence have indel informativeness caching values attached.
-        for (GATKRead read : data.getActiveRegion().getReads()) {
-            Assert.assertNull(read.getTransientAttribute(ReferenceConfidenceModel.INDEL_INFORMATIVE_BASES_CACHE_ATTRIBUTE_NAME));
-        }
         checkReferenceModelResult(data, contexts, expectedDPs, calls);
     }
 
@@ -576,10 +690,6 @@ public final class ReferenceConfidenceModelUnitTest extends GATKBaseTest {
                 final List<Integer> expectedDPs = new ArrayList<>(Collections.nCopies(data.getActiveRegion().getSpan().size(), 0));
                 for ( int i = start; i < readLen + start; i++ ) expectedDPs.set(i, 1);
                 final List<VariantContext> contexts = model.calculateRefConfidence(data.getRefHap(), haplotypes, data.getPaddedRefLoc(), data.getActiveRegion(), likelihoods, ploidyModel, calls);
-                // Asserting that none of the reads after calculateRefConfidence have indel informativeness caching values attached.
-                for (GATKRead read : data.getActiveRegion().getReads()) {
-                    Assert.assertNull(read.getTransientAttribute(ReferenceConfidenceModel.INDEL_INFORMATIVE_BASES_CACHE_ATTRIBUTE_NAME));
-                }
                 checkReferenceModelResult(data, contexts, expectedDPs, calls);
             }
         }
@@ -616,10 +726,6 @@ public final class ReferenceConfidenceModelUnitTest extends GATKBaseTest {
 
                     final List<Integer> expectedDPs = Collections.nCopies(data.getActiveRegion().getSpan().size(), nReads);
                     final List<VariantContext> contexts = model.calculateRefConfidence(data.getRefHap(), haplotypes, data.getPaddedRefLoc(), data.getActiveRegion(), likelihoods, ploidyModel, calls);
-                    // Asserting that none of the reads after calculateRefConfidence have indel informativeness caching values attached.
-                    for (GATKRead read : data.getActiveRegion().getReads()) {
-                        Assert.assertNull(read.getTransientAttribute(ReferenceConfidenceModel.INDEL_INFORMATIVE_BASES_CACHE_ATTRIBUTE_NAME));
-                    }
                     checkReferenceModelResult(data, contexts, expectedDPs, calls);
                 }
             }
