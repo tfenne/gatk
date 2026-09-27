@@ -291,4 +291,214 @@ public final class BaseGraphUnitTest extends GATKBaseTest {
         final Set<SeqVertex> expectedSet = expected == null ? Collections.emptySet() : new HashSet<>(Arrays.asList(expected));
         Assert.assertEquals(actualSet, expectedSet);
     }
+
+    @Test
+    public void adjacencyQueriesRejectAVertexNotInTheGraphWithoutAddingIt() {
+        final SeqGraph g = new SeqGraph(11);
+        g.addVertex(new SeqVertex("A"));
+        final SeqVertex absent = new SeqVertex("C");
+        Assert.assertThrows(IllegalArgumentException.class, () -> g.outgoingEdgesOf(absent));
+        Assert.assertThrows(IllegalArgumentException.class, () -> g.incomingEdgesOf(absent));
+        Assert.assertThrows(IllegalArgumentException.class, () -> g.outDegreeOf(absent));
+        Assert.assertThrows(IllegalArgumentException.class, () -> g.inDegreeOf(absent));
+        Assert.assertFalse(g.containsVertex(absent));
+        Assert.assertEquals(g.vertexSet().size(), 1);
+    }
+
+    @Test
+    public void adjacencyQueriesRejectANullVertex() {
+        final SeqGraph g = new SeqGraph(11);
+        g.addVertex(new SeqVertex("A"));
+        Assert.assertThrows(NullPointerException.class, () -> g.outgoingEdgesOf(null));
+        Assert.assertThrows(NullPointerException.class, () -> g.incomingEdgesOf(null));
+        Assert.assertThrows(NullPointerException.class, () -> g.outDegreeOf(null));
+        Assert.assertThrows(NullPointerException.class, () -> g.inDegreeOf(null));
+    }
+
+    @Test
+    public void aVertexWithoutEdgesHasNoAdjacentEdges() {
+        final SeqGraph g = new SeqGraph(11);
+        final SeqVertex v = new SeqVertex("A");
+        g.addVertex(v);
+        Assert.assertTrue(g.outgoingEdgesOf(v).isEmpty());
+        Assert.assertTrue(g.incomingEdgesOf(v).isEmpty());
+        Assert.assertEquals(g.outDegreeOf(v), 0);
+        Assert.assertEquals(g.inDegreeOf(v), 0);
+    }
+
+    @Test
+    public void adjacencyOfAClonedGraphIsIndependentOfTheOriginal() {
+        final SeqGraph g = new SeqGraph(11);
+        final SeqVertex a = new SeqVertex("A");
+        final SeqVertex b = new SeqVertex("C");
+        g.addVertices(a, b);
+        final SeqGraph copy = g.clone();
+        copy.addEdge(a, b);
+        Assert.assertEquals(copy.outDegreeOf(a), 1);
+        Assert.assertEquals(g.outDegreeOf(a), 0);
+        Assert.assertEquals(g.inDegreeOf(b), 0);
+    }
+
+    @Test
+    public void addingAnEdgeThatAlreadyJoinsOtherVerticesIsRejected() {
+        final SeqGraph g = new SeqGraph(11);
+        final SeqVertex a = new SeqVertex("A");
+        final SeqVertex b = new SeqVertex("C");
+        final SeqVertex c = new SeqVertex("G");
+        g.addVertices(a, b, c);
+        final BaseEdge e = new BaseEdge(false, 1);
+        g.addEdge(a, b, e);
+        Assert.assertThrows(IllegalArgumentException.class, () -> g.addEdge(a, c, e));
+        Assert.assertSame(g.getEdgeTarget(e), b);
+        Assert.assertEquals(g.edgeSet().size(), 1);
+    }
+
+    @Test
+    public void anEdgeCanJoinTheSameVerticesInAnotherGraph() {
+        final SeqGraph g = new SeqGraph(11);
+        final SeqVertex a = new SeqVertex("A");
+        final SeqVertex b = new SeqVertex("C");
+        g.addVertices(a, b);
+        final BaseEdge e = new BaseEdge(false, 1);
+        g.addEdge(a, b, e);
+        final SeqGraph other = new SeqGraph(11);
+        other.addVertices(a, b);
+        Assert.assertTrue(other.addEdge(a, b, e));
+        Assert.assertSame(other.getEdgeSource(e), a);
+        Assert.assertSame(g.getEdgeTarget(e), b);
+    }
+
+    @Test
+    public void anEdgeRemovedFromAGraphCannotJoinOtherVertices() {
+        final SeqGraph g = new SeqGraph(11);
+        final SeqVertex a = new SeqVertex("A");
+        final SeqVertex b = new SeqVertex("C");
+        final SeqVertex c = new SeqVertex("G");
+        g.addVertices(a, b, c);
+        final BaseEdge e = new BaseEdge(false, 1);
+        g.addEdge(a, b, e);
+        g.removeEdge(e);
+        Assert.assertThrows(IllegalArgumentException.class, () -> g.addEdge(a, c, e));
+    }
+
+    @Test
+    public void aCopyOfAnEdgeCanJoinOtherVertices() {
+        final SeqGraph g = new SeqGraph(11);
+        final SeqVertex a = new SeqVertex("A");
+        final SeqVertex b = new SeqVertex("C");
+        final SeqVertex c = new SeqVertex("G");
+        g.addVertices(a, b, c);
+        final BaseEdge e = new BaseEdge(false, 1);
+        g.addEdge(a, b, e);
+        final BaseEdge copy = e.copy();
+        Assert.assertTrue(g.addEdge(a, c, copy));
+        Assert.assertSame(g.getEdgeTarget(copy), c);
+        Assert.assertSame(g.getEdgeTarget(e), b);
+    }
+
+    @Test
+    public void aSecondEdgeBetweenTheSameVerticesIsRefused() {
+        final SeqGraph g = new SeqGraph(11);
+        final SeqVertex a = new SeqVertex("A");
+        final SeqVertex b = new SeqVertex("C");
+        g.addVertices(a, b);
+        final BaseEdge first = new BaseEdge(false, 1);
+        Assert.assertTrue(g.addEdge(a, b, first));
+        Assert.assertFalse(g.addEdge(a, b, new BaseEdge(true, 2)));
+        Assert.assertNull(g.addEdge(a, b));
+        Assert.assertEquals(g.edgeSet().size(), 1);
+        Assert.assertSame(g.getEdge(a, b), first);
+    }
+
+    @Test
+    public void addingAnEdgeAlreadyInTheGraphReturnsFalse() {
+        final SeqGraph g = new SeqGraph(11);
+        final SeqVertex a = new SeqVertex("A");
+        final SeqVertex b = new SeqVertex("C");
+        g.addVertices(a, b);
+        final BaseEdge e = new BaseEdge(false, 1);
+        g.addEdge(a, b, e);
+        Assert.assertFalse(g.addEdge(a, b, e));
+        Assert.assertEquals(g.edgeSet().size(), 1);
+    }
+
+    @Test
+    public void addingAnEdgeToAVertexNotInTheGraphIsRejected() {
+        final SeqGraph g = new SeqGraph(11);
+        final SeqVertex a = new SeqVertex("A");
+        g.addVertex(a);
+        final SeqVertex absent = new SeqVertex("C");
+        Assert.assertThrows(IllegalArgumentException.class, () -> g.addEdge(a, absent, new BaseEdge(false, 1)));
+        Assert.assertThrows(IllegalArgumentException.class, () -> g.addEdge(a, absent));
+        Assert.assertTrue(g.edgeSet().isEmpty());
+    }
+
+    @Test
+    public void addEdgeWhereNoneExistsAddsTheEdgeInInsertionOrder() {
+        final SeqGraph g = new SeqGraph(11);
+        final SeqVertex a = new SeqVertex("A");
+        final SeqVertex b = new SeqVertex("C");
+        final SeqVertex c = new SeqVertex("G");
+        g.addVertices(a, b, c);
+        final BaseEdge toB = new BaseEdge(false, 1);
+        final BaseEdge toC = new BaseEdge(false, 1);
+        g.addEdge(a, b, toB);
+        Assert.assertTrue(g.addEdgeWhereNoneExists(a, c, toC));
+        Assert.assertEquals(new ArrayList<>(g.outgoingEdgesOf(a)), Arrays.asList(toB, toC));
+        Assert.assertEquals(new ArrayList<>(g.edgeSet()), Arrays.asList(toB, toC));
+        Assert.assertSame(g.getEdgeTarget(toC), c);
+    }
+
+    @Test
+    public void addEdgeWhereNoneExistsRejectsAnEdgeJoiningOtherVertices() {
+        final SeqGraph g = new SeqGraph(11);
+        final SeqVertex a = new SeqVertex("A");
+        final SeqVertex b = new SeqVertex("C");
+        final SeqVertex c = new SeqVertex("G");
+        g.addVertices(a, b, c);
+        final BaseEdge e = new BaseEdge(false, 1);
+        g.addEdge(a, b, e);
+        Assert.assertThrows(IllegalArgumentException.class, () -> g.addEdgeWhereNoneExists(a, c, e));
+    }
+
+    @Test
+    public void aDuplicateOfAnEdgeCanJoinOtherVertices() {
+        final SeqGraph g = new SeqGraph(11);
+        final SeqVertex a = new SeqVertex("A");
+        final SeqVertex b = new SeqVertex("C");
+        final SeqVertex c = new SeqVertex("G");
+        g.addVertices(a, b, c);
+        final BaseEdge e = new MultiSampleEdge(false, 3, 1);
+        g.addEdge(a, b, e);
+        final BaseEdge duplicate = e.duplicate();
+        Assert.assertTrue(g.addEdge(a, c, duplicate));
+        Assert.assertSame(g.getEdgeTarget(duplicate), c);
+        Assert.assertSame(g.getEdgeTarget(e), b);
+    }
+
+    @Test
+    public void sequenceGraphKeepsEveryEdgeOnceInInsertionOrder() {
+        final SeqGraph source = new SeqGraph(11);
+        final SeqVertex a = new SeqVertex("A"), c = new SeqVertex("C"), g = new SeqVertex("G"), t = new SeqVertex("T");
+        source.addVertices(a, c, g, t);
+        source.addEdge(a, c, new BaseEdge(true, 3));
+        source.addEdge(c, g, new BaseEdge(true, 2));
+        source.addEdge(a, g, new BaseEdge(false, 1));
+        source.addEdge(g, g, new BaseEdge(false, 5));
+        source.addEdge(g, t, new BaseEdge(false, 4));
+
+        final SeqGraph seqGraph = source.toSequenceGraph();
+
+        Assert.assertEquals(seqGraph.vertexSet().size(), 4);
+        Assert.assertEquals(seqGraph.edgeSet().size(), 5);
+        final List<String> edges = new ArrayList<>();
+        for (final BaseEdge e : seqGraph.edgeSet()) {
+            edges.add(seqGraph.getEdgeSource(e).getSequenceString() + ">" + seqGraph.getEdgeTarget(e).getSequenceString()
+                    + ":" + e.getMultiplicity() + (e.isRef() ? "r" : ""));
+        }
+        Assert.assertEquals(edges, Arrays.asList("A>C:3r", "C>G:2r", "A>G:1", "G>G:5", "G>T:4"));
+        for (final BaseEdge e : seqGraph.edgeSet()) {
+            Assert.assertFalse(source.containsEdge(e), "sequence graph edges are copies");
+        }
+    }
 }

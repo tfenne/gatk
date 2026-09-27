@@ -182,7 +182,7 @@ public class SeqGraph extends BaseGraph<SeqVertex, BaseEdge> {
     protected boolean isLinearChainStart(final SeqVertex source) {
         return outDegreeOf(source) == 1
                 && ( inDegreeOf(source) != 1
-                     || outDegreeOf(incomingVerticesOf(source).iterator().next()) > 1 );
+                     || outDegreeOf(getEdgeSource(incomingEdgeOf(source))) > 1 );
     }
 
     /**
@@ -265,6 +265,18 @@ public class SeqGraph extends BaseGraph<SeqVertex, BaseEdge> {
         for( final BaseEdge edge : outgoingEdgesOf(last) ) { addEdge(addedVertex, getEdgeTarget(edge), edge.copy()); }
         for( final BaseEdge edge : incomingEdgesOf(first) )  { addEdge(getEdgeSource(edge), addedVertex, edge.copy()); }
 
+        // Remove the chain's edges directly, then its now edge-less vertices. Within the chain each vertex's single
+        // outgoing edge is the next vertex's single incoming edge, so the edges touching the chain are the first
+        // vertex's incoming edges, those links, and the last vertex's outgoing edges. Removing them explicitly leaves
+        // the same graph as removing the vertices would, but removes each link once, where removing the vertices
+        // gathers each vertex's edges into a new collection and tries each link from both of its vertices.
+        removeAllEdges(new ArrayList<>(incomingEdgesOf(first)));
+        for ( final SeqVertex v : linearChain ) {
+            if ( v != last ) {
+                removeEdge(outgoingEdgeOf(v));
+            }
+        }
+        removeAllEdges(new ArrayList<>(outgoingEdgesOf(last)));
         removeAllVertices(linearChain);
         return addedVertex;
     }

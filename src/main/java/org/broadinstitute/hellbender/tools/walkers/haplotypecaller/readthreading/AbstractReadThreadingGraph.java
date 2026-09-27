@@ -1025,7 +1025,9 @@ public abstract class AbstractReadThreadingGraph extends BaseGraph<MultiDeBruijn
 
         // either use our merge vertex, or create a new one in the chain
         final MultiDeBruijnVertex nextVertex = mergeVertex == null ? createVertex(kmer) : mergeVertex;
-        addEdge(prevVertex, nextVertex, ((MyEdgeFactory) getEdgeFactory()).createEdge(isRef, count));
+        // nextVertex's suffix is sequence[nextPos] and no outgoing edge above led to that suffix, so there is no edge
+        // from prevVertex to nextVertex yet
+        addEdgeWhereNoneExists(prevVertex, nextVertex, ((MyEdgeFactory) getEdgeFactory()).createEdge(isRef, count));
         return nextVertex;
     }
 
@@ -1049,8 +1051,10 @@ public abstract class AbstractReadThreadingGraph extends BaseGraph<MultiDeBruijn
                 final int len = end - start;
 
                 if (start != -1 && len >= kmerSize) {
-                    // if the sequence is long enough to get some value out of, add it to the graph
-                    final String name = read.getName() + '_' + start + '_' + end;
+                    // if the sequence is long enough to get some value out of, add it to the graph. A segment's
+                    // name is only read when graph transformations are being debugged, so the per-segment name
+                    // is built only then.
+                    final String name = debugGraphTransformations ? read.getName() + '_' + start + '_' + end : read.getName();
                     addSequence(name, ReadUtils.getSampleName(read, header), sequence, start, end, 1, false);
                 }
 

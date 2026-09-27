@@ -433,7 +433,7 @@ public final class SeqGraphUnitTest extends GATKBaseTest {
                         graph.addVertices(v);
                         graph.addEdge(v, a1, e);
                         expected.addVertex(v);
-                        expected.addEdge(v, acg, e);
+                        expected.addEdge(v, acg, e.copy());
                     }
 
                     for ( final SeqVertex v : makeVertices(nOutgoing) ) {
@@ -441,7 +441,7 @@ public final class SeqGraphUnitTest extends GATKBaseTest {
                         graph.addVertices(v);
                         graph.addEdge(g1, v, e);
                         expected.addVertex(v);
-                        expected.addEdge(acg, v, e);
+                        expected.addEdge(acg, v, e.copy());
                     }
 
                     tests.add(new Object[]{graph, expected});
@@ -495,4 +495,58 @@ public final class SeqGraphUnitTest extends GATKBaseTest {
         graph.simplifyGraph();
     }
 
+    private static List<String> edgeSequences(final SeqGraph graph) {
+        final List<String> result = new ArrayList<>();
+        for (final BaseEdge e : graph.edgeSet()) {
+            result.add(graph.getEdgeSource(e).getSequenceString() + ">" + graph.getEdgeTarget(e).getSequenceString() + ":" + e.getMultiplicity());
+        }
+        return result;
+    }
+
+    @Test
+    public void zippingAChainKeepsTheSurroundingEdgesInOrderAndAppendsTheMergedVertex() {
+        final SeqGraph graph = new SeqGraph(11);
+        final SeqVertex in1 = new SeqVertex("T"), in2 = new SeqVertex("TT");
+        final SeqVertex a = new SeqVertex("A"), c = new SeqVertex("C"), g = new SeqVertex("G");
+        final SeqVertex out1 = new SeqVertex("GG"), out2 = new SeqVertex("GGG");
+        final SeqVertex unrelated1 = new SeqVertex("AAA"), unrelated2 = new SeqVertex("CCC");
+        graph.addVertices(unrelated1, in1, in2, a, c, g, out1, out2, unrelated2);
+        graph.addEdge(unrelated1, unrelated2, new BaseEdge(false, 7));
+        graph.addEdge(in1, a, new BaseEdge(false, 1));
+        graph.addEdge(in2, a, new BaseEdge(true, 2));
+        graph.addEdge(a, c, new BaseEdge(true, 3));
+        graph.addEdge(c, g, new BaseEdge(true, 4));
+        graph.addEdge(g, out1, new BaseEdge(true, 5));
+        graph.addEdge(g, out2, new BaseEdge(false, 6));
+
+        Assert.assertTrue(graph.zipLinearChains());
+
+        final List<String> vertices = new ArrayList<>();
+        for (final SeqVertex v : graph.vertexSet()) {
+            vertices.add(v.getSequenceString());
+        }
+        // chains are zipped in vertex order: AAA,CCC first (its merged vertex has no edges), then A,C,G; each merged
+        // vertex is appended, and the copies of the surrounding edges follow the surviving edges in their old order
+        Assert.assertEquals(vertices, Arrays.asList("T", "TT", "GG", "GGG", "AAACCC", "ACG"));
+        Assert.assertEquals(edgeSequences(graph), Arrays.asList("ACG>GG:5", "ACG>GGG:6", "T>ACG:1", "TT>ACG:2"));
+        Assert.assertFalse(graph.containsVertex(a));
+        Assert.assertFalse(graph.containsVertex(c));
+        Assert.assertFalse(graph.containsVertex(g));
+    }
+
+    @Test
+    public void zippingStopsBeforeAVertexWithASelfLoop() {
+        final SeqGraph graph = new SeqGraph(11);
+        final SeqVertex a = new SeqVertex("A"), c = new SeqVertex("C"), g = new SeqVertex("G"), t = new SeqVertex("T");
+        graph.addVertices(a, c, g, t);
+        graph.addEdge(a, c, new BaseEdge(false, 1));
+        graph.addEdge(c, g, new BaseEdge(false, 2));
+        graph.addEdge(g, g, new BaseEdge(false, 3));
+        graph.addEdge(g, t, new BaseEdge(false, 4));
+
+        Assert.assertTrue(graph.zipLinearChains());
+
+        // the loop gives G two incoming edges, so the chain is A,C and G keeps its loop
+        Assert.assertEquals(edgeSequences(graph), Arrays.asList("G>G:3", "G>T:4", "AC>G:2"));
+    }
 }
