@@ -152,7 +152,7 @@ final class ReadStateManager {
             return;
         }
 
-        final LinkedList<AlignmentStateMachine> newReadStates = new LinkedList<>();
+        final List<AlignmentStateMachine> newReadStates = new ArrayList<>(reads.size());
 
         for (final GATKRead read : reads) {
             final AlignmentStateMachine state = new AlignmentStateMachine(read);
