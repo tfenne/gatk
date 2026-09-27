@@ -613,8 +613,8 @@ public class ReferenceConfidenceModel {
             //after the assembly. Only in the latter case flow based model is used in getDeletionQuality, in
             //active region detection we for now use more sensitive reference confidence model where any deletion is
             //a strong evidence against reference.
-            final byte qual = p.isDeletion() ? getDeletionQuality(p, refBase, readsWereRealigned) : p.getQual();
-            if ( (qual <= minBaseQual) && (flowBasedModel || !p.isDeletion())) {
+            final byte qual = countedQuality(p, refBase, readsWereRealigned);
+            if (isDroppedByBaseQuality(p, qual, minBaseQual)) {
                 continue;
             }
             if (!useSoftClippedBases && readsWereRealigned){
@@ -642,6 +642,38 @@ public class ReferenceConfidenceModel {
                                                                        final MathUtils.RunningAverage hqSoftClips,
                                                                        final boolean readsWereRealigned) {
         return calcGenotypeLikelihoodsOfRefVsAny(ploidy, pileup, refBase, minBaseQual, hqSoftClips, readsWereRealigned, 1.0);
+    }
+
+    /**
+     * Whether any element that this class's {@link #calcGenotypeLikelihoodsOfRefVsAny} counts before assembly (with
+     * {@code readsWereRealigned} false) is evidence for a non-reference allele, i.e. whether that method would report
+     * a non-zero non-reference depth. The two share the element filter and the alt test, so they agree exactly.
+     *
+     * @param pileup the pileup at the site
+     * @param refBase the reference base at the site
+     * @param minBaseQual bases with this quality or lower are not counted; outside flow mode deletions always are
+     * @return true if a counted element is alt by {@link #isAltBeforeAssembly}
+     */
+    final boolean hasAltEvidenceBeforeAssembly(final ReadPileup pileup, final byte refBase, final byte minBaseQual) {
+        for (final PileupElement p : pileup) {
+            if (!isDroppedByBaseQuality(p, countedQuality(p, refBase, false), minBaseQual) && isAltBeforeAssembly(p, refBase)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The quality an element is counted with: its base quality, or for a deletion {@link #getDeletionQuality}. */
+    private byte countedQuality(final PileupElement p, final byte refBase, final boolean readsWereRealigned) {
+        return p.isDeletion() ? getDeletionQuality(p, refBase, readsWereRealigned) : p.getQual();
+    }
+
+    /**
+     * Whether the base-quality filter drops an element counted with quality {@code qual}: any element at or below
+     * {@code minBaseQual}, except that outside flow mode every deletion is kept.
+     */
+    private boolean isDroppedByBaseQuality(final PileupElement p, final byte qual, final byte minBaseQual) {
+        return qual <= minBaseQual && (flowBasedModel || !p.isDeletion());
     }
 
     private int getOriginalSoftStart(GATKRead read) {
