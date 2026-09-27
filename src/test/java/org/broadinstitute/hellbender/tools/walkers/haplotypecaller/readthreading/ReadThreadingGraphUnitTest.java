@@ -452,6 +452,22 @@ public final class ReadThreadingGraphUnitTest extends GATKBaseTest {
         Assert.assertEquals(mergeResult, 0);
     }
 
+    private static GATKRead readWithUnusableMiddleBase() {
+        final byte[] bases = "ACGTACGTACGTACGTACGT".getBytes();
+        final byte[] quals = Utils.dupBytes((byte) 30, bases.length);
+        quals[10] = 0;
+        return ArtificialReadUtils.createArtificialRead(bases, quals, bases.length + "M");
+    }
+
+    @Test
+    public void readSegmentsAreNamedByReadAndBoundsWhenDebuggingGraphTransformations() {
+        final ReadThreadingGraph graph = new ReadThreadingGraph(5, true, (byte) 6, 1, -1);
+        final GATKRead read = readWithUnusableMiddleBase();
+        graph.addRead(read, ArtificialReadUtils.createArtificialSamHeader());
+        final List<String> names = graph.getAllPendingSequences().stream().map(s -> s.name).collect(Collectors.toList());
+        Assert.assertEquals(names, Arrays.asList(read.getName() + "_0_10", read.getName() + "_11_20"));
+    }
+
     @Test
     public void testGetBasesForPath() {
 
