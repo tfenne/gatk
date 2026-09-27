@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Random;
 
 public class MannWhitneyUUnitTest extends GATKBaseTest {
     private static double DELTA_PRECISION = 0.00001;
@@ -174,5 +175,77 @@ public class MannWhitneyUUnitTest extends GATKBaseTest {
         } else {
             Assert.assertTrue(result < 0.01, String.format("%f %d %f", result, numToReduceIn2, dist2.get(0)));
         }
+    }
+
+    @Test
+    public void testExactPValueMatchesEnumerationOfAllRankAssignments() {
+        final Random random = new Random(17);
+        for (int trial = 0; trial < 200; trial++) {
+            // Small integer values give plenty of ties; both groups stay below the size where the normal
+            // approximation takes over, so every trial goes through the exact test.
+            final double[] series1 = random.ints(1 + random.nextInt(9), 0, 6).asDoubleStream().toArray();
+            final double[] series2 = random.ints(1 + random.nextInt(9), 0, 6).asDoubleStream().toArray();
+            final MannWhitneyU.Result result = rst.test(series1, series2, MannWhitneyU.TestType.FIRST_DOMINATES);
+            Assert.assertEquals(result.getP(), enumeratedExactPValue(series1, series2, result.getU()), 0.0,
+                    Arrays.toString(series1) + " vs " + Arrays.toString(series2));
+        }
+    }
+
+    @Test
+    public void testExactTwoSidedTestWithUnreachableUGivesZeroInsteadOfFailing() {
+        // Group 1's U can only be 0.5 or 2 here, while the two-sided U is 0: no assignment has a smaller or equal
+        // group-1 U, so the exact test's p-value is 0.
+        final MannWhitneyU.Result result = rst.test(new double[] {2}, new double[] {1, 1}, MannWhitneyU.TestType.TWO_SIDED);
+        Assert.assertEquals(result.getU(), 0.0);
+        Assert.assertEquals(result.getP(), 0.0);
+    }
+
+    /**
+     * The exact p-value by brute force: over every choice of series1.length of the pooled mid-ranks for group 1, the
+     * fraction whose group-1 U is smaller than u, counting those equal to u by half. Ranks and U are doubled so that
+     * all the arithmetic is on integers.
+     */
+    private static double enumeratedExactPValue(final double[] series1, final double[] series2, final double u) {
+        final int n1 = series1.length;
+        final double[] pooled = Doubles.concat(series1, series2);
+        final int n = pooled.length;
+        final double[] sorted = pooled.clone();
+        Arrays.sort(sorted);
+        final int[] doubledRanks = new int[n];
+        for (int i = 0; i < n; i++) {
+            int first = 0;
+            while (sorted[first] != pooled[i]) {
+                first++;
+            }
+            int last = first;
+            while (last + 1 < n && sorted[last + 1] == pooled[i]) {
+                last++;
+            }
+            // the mid-rank of a tie band covering 1-based ranks first+1 .. last+1, doubled
+            doubledRanks[i] = first + last + 2;
+        }
+        final long observedDoubledU = Math.round(2 * u);
+        long smaller = 0;
+        long equal = 0;
+        long total = 0;
+        for (int subset = 0; subset < (1 << n); subset++) {
+            if (Integer.bitCount(subset) != n1) {
+                continue;
+            }
+            long doubledRankSum = 0;
+            for (int i = 0; i < n; i++) {
+                if ((subset & (1 << i)) != 0) {
+                    doubledRankSum += doubledRanks[i];
+                }
+            }
+            final long doubledU = doubledRankSum - (long) n1 * (n1 + 1);
+            total++;
+            if (doubledU < observedDoubledU) {
+                smaller++;
+            } else if (doubledU == observedDoubledU) {
+                equal++;
+            }
+        }
+        return (equal / 2.0 + smaller) / total;
     }
 }

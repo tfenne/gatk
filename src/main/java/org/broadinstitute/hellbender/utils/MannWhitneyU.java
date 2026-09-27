@@ -1,15 +1,11 @@
 package org.broadinstitute.hellbender.utils;
 
-import htsjdk.samtools.util.Histogram;
 import org.apache.commons.math3.distribution.NormalDistribution;
-import org.apache.commons.math3.util.CombinatoricsUtils;
-import org.apache.commons.math3.util.FastMath;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Imported with changes from Picard private.
@@ -141,43 +137,10 @@ public class MannWhitneyU {
         }
     }
 
-    /**
-     * Key for the map from Integer[] to set of all permutations of that array.
-     */
-    private static class Key {
-        final Integer[] listToPermute;
-
-        private Key(Integer[] listToPermute) {
-            this.listToPermute = listToPermute;
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (o == null || getClass() != o.getClass()) return false;
-
-            Key that = (Key) o;
-            return (Arrays.deepEquals(this.listToPermute, that.listToPermute));
-        }
-
-        @Override
-        public int hashCode() {
-            int result = 17;
-            for (Integer i : listToPermute) {
-                result = 31 * result + listToPermute[i];
-            }
-            return result;
-        }
-    }
-
     // Constructs a normal distribution; this needs to be a standard normal in order to get a Z-score in the exact case
     private static final double NORMAL_MEAN = 0;
     private static final double NORMAL_SD = 1;
     private static final NormalDistribution NORMAL = new NormalDistribution(NORMAL_MEAN, NORMAL_SD);
-
-    /**
-     * A map of an Integer[] of the labels to the set of all possible permutations of those labels.
-     */
-    private static final Map<Key, Set<List<Integer>>> PERMUTATIONS = new ConcurrentHashMap<Key, Set<List<Integer>>>();
 
     /**
      * The minimum length for both data series in order to use a normal distribution
@@ -409,137 +372,59 @@ public class MannWhitneyU {
         return new Result(u, z, p, Math.abs(median(series1) - median(series2)));
     }
 
-    private void swap(Integer[] arr, int i, int j) {
-        int temp = arr[i];
-        arr[i] = arr[j];
-        arr[j] = temp;
-    }
-
     /**
-     * Uses a method that generates permutations in lexicographic order. (https://en.wikipedia.org/wiki/Permutation#Generation_in_lexicographic_order)
-     * @param temp Sorted list of elements to be permuted.
-     * @param allPermutations Empty set that will hold all possible permutations.
-     */
-    private void calculatePermutations(Integer[] temp, Set<List<Integer>> allPermutations) {
-        allPermutations.add(new ArrayList<>(Arrays.asList(temp)));
-        while (true) {
-            int k = -1;
-            for (int i = temp.length - 2; i >= 0; i--) {
-                if (temp[i] < temp[i + 1]) {
-                    k = i;
-                    break;
-                }
-            }
-
-            if (k == -1) {
-                break;
-            }
-
-            int l = -1;
-            for (int i = temp.length - 1; i >= k + 1; i--) {
-                if (temp[k] < temp[i]) {
-                    l = i;
-                    break;
-                }
-            }
-
-            swap(temp, k, l);
-
-            int end = temp.length - 1;
-            for (int begin = k + 1; begin < end; begin++) {
-                swap(temp, begin, end);
-                end--;
-            }
-            allPermutations.add(new ArrayList<>(Arrays.asList(temp)));
-        }
-    }
-
-    /**
-     * Checks to see if the permutations have already been computed before creating them from scratch.
-     * @param listToPermute List of tags in numerical order to be permuted
-     * @param numOfPermutations The number of permutations this list will have (n1+n2 choose n1)
-     * @return Set of all possible permutations for the given list.
-     */
-    Set<List<Integer>> getPermutations(final Integer[] listToPermute, int numOfPermutations) {
-        Key key = new Key(listToPermute);
-        Set<List<Integer>> permutations = PERMUTATIONS.get(key);
-        if (permutations == null) {
-            permutations = new HashSet<>(numOfPermutations);
-            calculatePermutations(listToPermute, permutations);
-            PERMUTATIONS.put(key, permutations);
-        }
-        return permutations;
-    }
-
-    /**
-     * Creates histogram of test statistics from a permutation test.
+     * Computes the exact one-sided p-value of the observed U over every assignment of the pooled ranks to groups of
+     * the observed sizes: the fraction of assignments whose group-1 U is smaller than the observed U, counting
+     * assignments with the observed U by half. An observed U that no assignment gives group 1 is counted the same
+     * way, so it never needs a matching bin. Counting the observed bin by half deals with the edge case where the observed value
+     * is also the most extreme value; the plain cumulative distribution gives a p-value of 1 there, which doesn't
+     * result in a usable z-score.
      *
      * @param series1 Data from group 1
      * @param series2 Data from group 2
      * @param testStatU Test statistic U from observed data
-     * @return P-value based on histogram with u calculated for every possible permutation of group tag.
+     * @return P-value of the observed U over all assignments of the ranks to the two groups
      */
     private double permutationTest(final double[] series1, final double[] series2, final double testStatU) {
-
-        // note that Mann-Whitney U stats are always integer or half-integer (this is true even in the case of ties)
-        // thus for safety we store a histogram of twice the Mann-Whitney values
-        final Histogram<Long> histo = new Histogram<>();
         final int n1 = series1.length;
-        final int n2 = series2.length;
+        final Rank[] ranks = calculateRank(series1, series2).getRank();
 
-        RankedData rankedGroups = calculateRank(series1, series2);
-        Rank[] ranks = rankedGroups.getRank();
-
-        Integer[] firstPermutation = new Integer[n1 + n2];
-
-        for (int i = 0; i < firstPermutation.length; i++) {
-            if (i < n1) {
-                firstPermutation[i] = 0;
-            } else {
-                firstPermutation[i] = 1;
-            }
+        // Tied ranks are averaged within their band, so every rank is a multiple of 1/2 and twice it is an exact
+        // integer; so is twice U, which is twice the group-1 rank sum less n1 * (n1 + 1).
+        final int[] doubledRanks = new int[ranks.length];
+        int maxDoubledRankSum = 0;
+        for (int i = 0; i < ranks.length; i++) {
+            doubledRanks[i] = Math.round(2 * ranks[i].rank);
+            maxDoubledRankSum += doubledRanks[i];
         }
 
-        final int numOfPerms = (int) CombinatoricsUtils.binomialCoefficient(n1 + n2, n2);
-        Set<List<Integer>> allPermutations = getPermutations(firstPermutation, numOfPerms);
-
-        double[] newSeries1 = new double[n1];
-        double[] newSeries2 = new double[n2];
-
-        //iterate over all permutations
-        for (List<Integer> currPerm : allPermutations) {
-            int series1End = 0;
-            int series2End = 0;
-            for (int i = 0; i < currPerm.size(); i++) {
-                int grouping = currPerm.get(i);
-                if (grouping == 0) {
-                    newSeries1[series1End] = ranks[i].rank;
-                    series1End++;
-                } else {
-                    newSeries2[series2End] = ranks[i].rank;
-                    series2End++;
+        // assignments[k][s]: the number of ways to choose k of the ranks seen so far with doubled ranks summing to s
+        final long[][] assignments = new long[n1 + 1][maxDoubledRankSum + 1];
+        assignments[0][0] = 1;
+        for (final int doubledRank : doubledRanks) {
+            for (int k = n1; k >= 1; k--) {
+                for (int sum = maxDoubledRankSum; sum >= doubledRank; sum--) {
+                    assignments[k][sum] += assignments[k - 1][sum - doubledRank];
                 }
             }
-            assert (series1End == n1);
-            assert (series2End == n2);
-
-            double newU = MathUtils.sum(newSeries1) - ((n1 * (n1 + 1)) / 2.0);
-            histo.increment(FastMath.round(2 * newU));
         }
 
-        /**
-         * In order to deal with edge cases where the observed value is also the most extreme value, we are taking half
-         * of the count in the observed bin plus everything more extreme (in the FIRST_DOMINATES case the smaller bins)
-         * and dividing by the total count of everything in the histogram. Just using getCumulativeDistribution() gives
-         * a p-value of 1 in the most extreme case which doesn't result in a usable z-score.
-         */
-        double sumOfAllSmallerBins = histo.get(FastMath.round(2 * testStatU)).getValue() / 2.0;
-
-        for (final Histogram.Bin<Long> bin : histo.values()) {
-            if (bin.getId() < FastMath.round(2 * testStatU)) sumOfAllSmallerBins += bin.getValue();
+        final long observedDoubledU = Math.round(2 * testStatU);
+        final long doubledUOffset = (long) n1 * (n1 + 1);
+        long smaller = 0;
+        long equal = 0;
+        long total = 0;
+        for (int sum = 0; sum <= maxDoubledRankSum; sum++) {
+            final long count = assignments[n1][sum];
+            final long doubledU = sum - doubledUOffset;
+            total += count;
+            if (doubledU < observedDoubledU) {
+                smaller += count;
+            } else if (doubledU == observedDoubledU) {
+                equal += count;
+            }
         }
-
-        return sumOfAllSmallerBins / histo.getCount();
+        return (equal / 2.0 + smaller) / total;
     }
 
 }
