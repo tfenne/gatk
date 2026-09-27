@@ -1025,7 +1025,9 @@ public abstract class AbstractReadThreadingGraph extends BaseGraph<MultiDeBruijn
 
         // either use our merge vertex, or create a new one in the chain
         final MultiDeBruijnVertex nextVertex = mergeVertex == null ? createVertex(kmer) : mergeVertex;
-        addEdge(prevVertex, nextVertex, ((MyEdgeFactory) getEdgeFactory()).createEdge(isRef, count));
+        // nextVertex's suffix is sequence[nextPos] and no outgoing edge above led to that suffix, so there is no edge
+        // from prevVertex to nextVertex yet
+        addEdgeWhereNoneExists(prevVertex, nextVertex, ((MyEdgeFactory) getEdgeFactory()).createEdge(isRef, count));
         return nextVertex;
     }
 

@@ -397,6 +397,71 @@ public final class BaseGraphUnitTest extends GATKBaseTest {
     }
 
     @Test
+    public void aSecondEdgeBetweenTheSameVerticesIsRefused() {
+        final SeqGraph g = new SeqGraph(11);
+        final SeqVertex a = new SeqVertex("A");
+        final SeqVertex b = new SeqVertex("C");
+        g.addVertices(a, b);
+        final BaseEdge first = new BaseEdge(false, 1);
+        Assert.assertTrue(g.addEdge(a, b, first));
+        Assert.assertFalse(g.addEdge(a, b, new BaseEdge(true, 2)));
+        Assert.assertNull(g.addEdge(a, b));
+        Assert.assertEquals(g.edgeSet().size(), 1);
+        Assert.assertSame(g.getEdge(a, b), first);
+    }
+
+    @Test
+    public void addingAnEdgeAlreadyInTheGraphReturnsFalse() {
+        final SeqGraph g = new SeqGraph(11);
+        final SeqVertex a = new SeqVertex("A");
+        final SeqVertex b = new SeqVertex("C");
+        g.addVertices(a, b);
+        final BaseEdge e = new BaseEdge(false, 1);
+        g.addEdge(a, b, e);
+        Assert.assertFalse(g.addEdge(a, b, e));
+        Assert.assertEquals(g.edgeSet().size(), 1);
+    }
+
+    @Test
+    public void addingAnEdgeToAVertexNotInTheGraphIsRejected() {
+        final SeqGraph g = new SeqGraph(11);
+        final SeqVertex a = new SeqVertex("A");
+        g.addVertex(a);
+        final SeqVertex absent = new SeqVertex("C");
+        Assert.assertThrows(IllegalArgumentException.class, () -> g.addEdge(a, absent, new BaseEdge(false, 1)));
+        Assert.assertThrows(IllegalArgumentException.class, () -> g.addEdge(a, absent));
+        Assert.assertTrue(g.edgeSet().isEmpty());
+    }
+
+    @Test
+    public void addEdgeWhereNoneExistsAddsTheEdgeInInsertionOrder() {
+        final SeqGraph g = new SeqGraph(11);
+        final SeqVertex a = new SeqVertex("A");
+        final SeqVertex b = new SeqVertex("C");
+        final SeqVertex c = new SeqVertex("G");
+        g.addVertices(a, b, c);
+        final BaseEdge toB = new BaseEdge(false, 1);
+        final BaseEdge toC = new BaseEdge(false, 1);
+        g.addEdge(a, b, toB);
+        Assert.assertTrue(g.addEdgeWhereNoneExists(a, c, toC));
+        Assert.assertEquals(new ArrayList<>(g.outgoingEdgesOf(a)), Arrays.asList(toB, toC));
+        Assert.assertEquals(new ArrayList<>(g.edgeSet()), Arrays.asList(toB, toC));
+        Assert.assertSame(g.getEdgeTarget(toC), c);
+    }
+
+    @Test
+    public void addEdgeWhereNoneExistsRejectsAnEdgeJoiningOtherVertices() {
+        final SeqGraph g = new SeqGraph(11);
+        final SeqVertex a = new SeqVertex("A");
+        final SeqVertex b = new SeqVertex("C");
+        final SeqVertex c = new SeqVertex("G");
+        g.addVertices(a, b, c);
+        final BaseEdge e = new BaseEdge(false, 1);
+        g.addEdge(a, b, e);
+        Assert.assertThrows(IllegalArgumentException.class, () -> g.addEdgeWhereNoneExists(a, c, e));
+    }
+
+    @Test
     public void aDuplicateOfAnEdgeCanJoinOtherVertices() {
         final SeqGraph g = new SeqGraph(11);
         final SeqVertex a = new SeqVertex("A");

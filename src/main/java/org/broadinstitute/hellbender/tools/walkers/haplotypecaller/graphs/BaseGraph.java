@@ -7,7 +7,6 @@ import org.broadinstitute.hellbender.utils.Utils;
 import org.jgrapht.EdgeFactory;
 import org.jgrapht.alg.CycleDetector;
 import org.jgrapht.graph.AbstractBaseGraph;
-import org.jgrapht.graph.DefaultDirectedGraph;
 import org.jgrapht.graph.specifics.DirectedEdgeContainer;
 import org.jgrapht.graph.specifics.DirectedSpecifics;
 import org.jgrapht.graph.specifics.Specifics;
@@ -22,8 +21,12 @@ import java.util.stream.Collectors;
 
 /**
  * Common code for graphs used for local assembly.
+ *
+ * A graph never holds two edges between the same pair of vertices, and an edge object joins one pair of vertices for
+ * life (see {@link BaseEdge}). The graph refuses parallel edges itself rather than through jgrapht, so jgrapht's
+ * {@link #isAllowingMultipleEdges()} and {@link #getType()} report that parallel edges are allowed.
  */
-public abstract class BaseGraph<V extends BaseVertex, E extends BaseEdge> extends DefaultDirectedGraph<V, E> {
+public abstract class BaseGraph<V extends BaseVertex, E extends BaseEdge> extends AbstractBaseGraph<V, E> {
     private static final long serialVersionUID = 1l;
     protected final int kmerSize;
 
@@ -35,7 +38,10 @@ public abstract class BaseGraph<V extends BaseVertex, E extends BaseEdge> extend
      * @param kmerSize
      */
     protected BaseGraph(final int kmerSize, final EdgeFactory<V,E> edgeFactory) {
-        super(edgeFactory);
+        // A directed, unweighted graph with loops. jgrapht is told parallel edges are allowed only so that it never
+        // searches for one: the addEdge methods below refuse them themselves, and addEdgeWhereNoneExists lets a caller
+        // that has ruled one out skip the search.
+        super(edgeFactory, true, true, true, false);
         Utils.validateArg(kmerSize > 0, () -> "kmerSize must be > 0 but got " + kmerSize);
         this.kmerSize = kmerSize;
     }
@@ -119,15 +125,51 @@ public abstract class BaseGraph<V extends BaseVertex, E extends BaseEdge> extend
      * An edge stores its endpoints (see {@link BaseEdge}), so an edge object that already joins other vertices, in
      * this graph or another, is rejected rather than silently re-pointed wherever it is held.
      *
-     * @throws IllegalArgumentException if {@code e} already joins vertices other than {@code source} and {@code target}
+     * @return true if the edge was added, false if the graph already had an edge from {@code source} to {@code target}
+     * @throws NullPointerException if {@code e} is null
+     * @throws IllegalArgumentException if {@code e} already joins vertices other than {@code source} and {@code target},
+     *                                  in this graph or another
      */
     @Override
     public boolean addEdge(final V source, final V target, final E e) {
-        if (e != null && e.joinsOtherVertices(source, target)) {
+        Objects.requireNonNull(e);
+        rejectEdgeJoiningOtherVertices(source, target, e);
+        return !containsEdge(source, target) && super.addEdge(source, target, e);
+    }
+
+    /**
+     * Adds an edge from {@code source} to {@code target} when the caller has already established that the graph has no
+     * edge between them, skipping the search for one that {@link #addEdge(BaseVertex, BaseVertex, BaseEdge)} makes.
+     *
+     * @return true if the edge was added, false if the graph already contains {@code e}
+     * @throws NullPointerException if {@code e} is null
+     * @throws IllegalArgumentException if {@code e} already joins vertices other than {@code source} and {@code target},
+     *                                  in this graph or another
+     */
+    protected final boolean addEdgeWhereNoneExists(final V source, final V target, final E e) {
+        Objects.requireNonNull(e);
+        rejectEdgeJoiningOtherVertices(source, target, e);
+        // The precondition is checked only where assertions are enabled, as in tests.
+        assert !containsEdge(source, target) : "an edge from " + source + " to " + target + " already exists";
+        return super.addEdge(source, target, e);
+    }
+
+    /**
+     * Adds a new edge from {@code source} to {@code target}, made by the graph's edge factory, unless the graph already
+     * has an edge between them.
+     *
+     * @return the new edge, or null if the graph already had an edge from {@code source} to {@code target}
+     */
+    @Override
+    public E addEdge(final V source, final V target) {
+        return containsEdge(source, target) ? null : super.addEdge(source, target);
+    }
+
+    private static void rejectEdgeJoiningOtherVertices(final BaseVertex source, final BaseVertex target, final BaseEdge e) {
+        if (e.joinsOtherVertices(source, target)) {
             throw new IllegalArgumentException("edge " + e + " already joins " + e.describeJoinedVertices()
                     + "; add its duplicate() to join " + source + " -> " + target);
         }
-        return super.addEdge(source, target, e);
     }
 
     /**
