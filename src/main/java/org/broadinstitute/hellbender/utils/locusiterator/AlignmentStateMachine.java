@@ -7,6 +7,7 @@ import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.pileup.PileupElement;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
+import org.broadinstitute.hellbender.utils.read.ReadUtils;
 
 import java.util.List;
 
@@ -18,6 +19,8 @@ import java.util.List;
  * on every and only on actual reference bases. This can be a (mis)match or a deletion
  * (in the latter case, we still return on every individual reference base the deletion spans).
  *
+ * The machine snapshots the read's cigar, strand and adaptor boundary (which depends on the mate position,
+ * strand and fragment length) at construction. The read must not be modified while the machine is live.
  */
 public final class AlignmentStateMachine {
     /**
@@ -33,6 +36,10 @@ public final class AlignmentStateMachine {
      */
     private final List<CigarElement> cigarElements;
     private final int nCigarElements;
+
+    // Inputs of the per-locus adaptor check, taken once per read rather than through the read at every locus.
+    private final int adaptorBoundary;
+    private final boolean reverseStrand;
     private int currentCigarElementOffset = -1;
 
     /**
@@ -59,6 +66,8 @@ public final class AlignmentStateMachine {
         this.read = read;
         this.cigarElements = read.getCigarElements();
         this.nCigarElements = cigarElements.size();
+        this.adaptorBoundary = ReadUtils.adaptorBoundaryForBaseChecks(read);
+        this.reverseStrand = read.isReverseStrand();
         initializeAsLeftEdge();
     }
 
@@ -139,6 +148,18 @@ public final class AlignmentStateMachine {
     public SimpleInterval getLocation() {
         // TODO -- may return wonky results if on an edge (could be 0 or could be beyond genome location)
         return new SimpleInterval(read.getContig(), getGenomePosition(), getGenomePosition());
+    }
+
+    /**
+     * Whether the read's base at the given position lies inside the sequencing adaptor, as
+     * {@link ReadUtils#isBaseInsideAdaptor} would report for this read.
+     *
+     * @param position a reference position covered by the read
+     * @return true if the base aligned to the position lies inside the adaptor
+     */
+    public boolean isBaseInsideAdaptor(final int position) {
+        return adaptorBoundary != ReadUtils.CANNOT_COMPUTE_ADAPTOR_BOUNDARY
+                && ReadUtils.isPastAdaptorBoundary(reverseStrand, adaptorBoundary, position);
     }
 
     /**

@@ -7,6 +7,7 @@ import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.downsampling.Downsampler;
 import org.broadinstitute.hellbender.utils.downsampling.LevelingDownsampler;
 
+import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
@@ -24,8 +25,11 @@ final class PerSampleReadStateManager implements Iterable<AlignmentStateMachine>
      * The state machines must be ordered by the alignment start of their underlying reads, with the
      * lowest alignment starts on the left, and the largest on the right
      */
-    private List<AlignmentStateMachine> readStatesByAlignmentStart = new LinkedList<>();
+    // Walked in full at every locus, and updateReadStates removes finished states by indexed in-place
+    // compaction, so it must stay a random-access list, including after downsampling replaces it.
+    private ArrayList<AlignmentStateMachine> readStatesByAlignmentStart = new ArrayList<>();
 
+    private final String sampleName;
     private final Downsampler<LinkedList<AlignmentStateMachine>> levelingDownsampler;
     private final int downsamplingTarget;
 
@@ -41,10 +45,12 @@ final class PerSampleReadStateManager implements Iterable<AlignmentStateMachine>
 
     /**
      * Create a new PerSampleReadStateManager with downsampling parameters as requested by LIBSDownsamplingInfo
+     * @param sampleName the sample whose read states this manager holds; null for reads with no sample
      * @param info the downsampling params we want to use
      */
-    public PerSampleReadStateManager(final LIBSDownsamplingInfo info) {
+    public PerSampleReadStateManager(final String sampleName, final LIBSDownsamplingInfo info) {
         Utils.nonNull(info);
+        this.sampleName = sampleName;
         this.downsamplingTarget = info.isPerformDownsampling() ? info.getToCoverage() : -1;
         this.levelingDownsampler = info.isPerformDownsampling()
                 ? new LevelingDownsampler<>(info.getToCoverage())
@@ -82,8 +88,8 @@ final class PerSampleReadStateManager implements Iterable<AlignmentStateMachine>
      * Flattens the grouped list of list of alignment state machines into a single list in order
      * @return a non-null list contains the state machines
      */
-    private LinkedList<AlignmentStateMachine> flattenByAlignmentStart(final List<LinkedList<AlignmentStateMachine>> grouped) {
-        final LinkedList<AlignmentStateMachine> flat = new LinkedList<>();
+    private ArrayList<AlignmentStateMachine> flattenByAlignmentStart(final List<LinkedList<AlignmentStateMachine>> grouped) {
+        final ArrayList<AlignmentStateMachine> flat = new ArrayList<>();
         for ( final List<AlignmentStateMachine> l : grouped ) {
             flat.addAll(l);
         }
@@ -126,6 +132,10 @@ final class PerSampleReadStateManager implements Iterable<AlignmentStateMachine>
      * Is downsampling enabled for this manager?
      * @return true if we are downsampling, false otherwise
      */
+    public String getSampleName() {
+        return sampleName;
+    }
+
     private boolean isDownsampling() {
         return levelingDownsampler != null;
     }
@@ -176,26 +186,40 @@ final class PerSampleReadStateManager implements Iterable<AlignmentStateMachine>
     }
 
     /**
+     * The read state at the given index, in alignment start order.
+     *
+     * @param index an index from 0 to {@link #size()} - 1
+     * @return the read state at that index
+     */
+    public AlignmentStateMachine get(final int index) {
+        return readStatesByAlignmentStart.get(index);
+    }
+
+    /**
      * Advances all read states forward by one element, removing states that are
      * no long aligned to the current position.
      * @return the number of states we're removed after advancing
      */
     public int updateReadStates() {
-        int nRemoved = 0;
-        final Iterator<AlignmentStateMachine> it = iterator();
-        while (it.hasNext()) {
-            final AlignmentStateMachine state = it.next();
+        // Advance every state and compact the surviving ones to the front, preserving order.
+        final List<AlignmentStateMachine> states = readStatesByAlignmentStart;
+        final int n = states.size();
+        int kept = 0;
+        for (int next = 0; next < n; next++) {
+            final AlignmentStateMachine state = states.get(next);
             final CigarOperator op = state.stepForwardOnGenome();
-            if (op == null) {
-                // we discard the read only when we are past its end AND indel at the end of the read (if any) was
-                // already processed. Keeping the read state that returned null upon stepForwardOnGenome() is safe
-                // as the next call to stepForwardOnGenome() will return null again AND will clear hadIndel() flag.
-                it.remove();                                                // we've stepped off the end of the object
-                nRemoved++;
+            // we discard the read only when we are past its end AND indel at the end of the read (if any) was
+            // already processed. Keeping the read state that returned null upon stepForwardOnGenome() is safe
+            // as the next call to stepForwardOnGenome() will return null again AND will clear hadIndel() flag.
+            if (op != null) {
+                // Move the surviving state into the next kept slot, which is at or before its current one.
+                states.set(kept++, state);
             }
         }
-
-        return nRemoved;
+        if (kept < n) {
+            states.subList(kept, n).clear();
+        }
+        return n - kept;
     }
 
     /**

@@ -56,6 +56,42 @@ public final class ReservoirDownsamplerUnitTest extends GATKBaseTest {
 
     }
 
+    private static List<GATKRead> readsNamed(final String prefix, final int count) {
+        final SAMFileHeader header = ArtificialReadUtils.createArtificialSamHeader(1, 1, 1000000);
+        return IntStream.range(0, count).mapToObj(i -> ArtificialReadUtils.createArtificialRead(header, prefix + i, 0, 1, 100)).collect(Collectors.toList());
+    }
+
+    private static void assertFresh(final ReservoirDownsampler downsampler) {
+        Assert.assertEquals(downsampler.size(), 0);
+        Assert.assertFalse(downsampler.hasFinalizedItems());
+        Assert.assertFalse(downsampler.hasPendingItems());
+        Assert.assertEquals(downsampler.getNumberOfDiscardedItems(), 0);
+        downsampler.submit(readsNamed("next", 1).get(0));
+        Assert.assertEquals(downsampler.size(), 1);
+    }
+
+    @Test
+    public void fullCycleAfterOverflowLeavesTheDownsamplerFresh() {
+        final ReservoirDownsampler downsampler = new ReservoirDownsampler(5, true);
+        downsampler.submit(readsNamed("read", 12));
+        downsampler.signalEndOfInput();
+        Assert.assertEquals(downsampler.consumeFinalizedItems().size(), 5);
+        Assert.assertEquals(downsampler.getNumberOfDiscardedItems(), 7);
+        downsampler.clearItems();
+        downsampler.resetStats();
+        assertFresh(downsampler);
+    }
+
+    @Test
+    public void emptyCycleLeavesTheDownsamplerFresh() {
+        final ReservoirDownsampler downsampler = new ReservoirDownsampler(5, true);
+        downsampler.signalEndOfInput();
+        Assert.assertTrue(downsampler.consumeFinalizedItems().isEmpty());
+        downsampler.clearItems();
+        downsampler.resetStats();
+        assertFresh(downsampler);
+    }
+
     @DataProvider(name = "ReservoirDownsamplerTestDataProvider")
     public Object[][] createReservoirDownsamplerTestData() {
         for ( int reservoirSize = 1; reservoirSize <= 10000; reservoirSize *= 10 ) {

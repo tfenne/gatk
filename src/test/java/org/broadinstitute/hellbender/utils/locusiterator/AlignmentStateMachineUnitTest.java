@@ -9,6 +9,7 @@ import htsjdk.samtools.SamReader;
 import htsjdk.samtools.SamReaderFactory;
 import org.broadinstitute.hellbender.utils.read.ArtificialReadUtils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
+import org.broadinstitute.hellbender.utils.read.ReadUtils;
 import org.broadinstitute.hellbender.utils.read.SAMRecordToGATKReadAdapter;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
@@ -125,5 +126,103 @@ public final class AlignmentStateMachineUnitTest extends LocusIteratorByStateBas
         }
         Assert.assertEquals(steps, referenceLength);
         Assert.assertEquals(state.getReadOffset(), readLength);
+    }
+
+    private static GATKRead pairedRead(final boolean reverseStrand, final int start, final int length, final int mateStart, final int fragmentLength) {
+        final SAMFileHeader header = ArtificialReadUtils.createArtificialSamHeader(1, 1, 10000);
+        final GATKRead read = ArtificialReadUtils.createArtificialRead(header, "read", 0, start, length);
+        read.setIsPaired(true);
+        read.setIsReverseStrand(reverseStrand);
+        read.setMateIsReverseStrand(!reverseStrand);
+        read.setMatePosition(read.getContig(), mateStart);
+        read.setFragmentLength(fragmentLength);
+        return read;
+    }
+
+    @Test
+    public void forwardReadBasesAtOrPastTheFragmentEndAreInsideTheAdaptor() {
+        final GATKRead read = pairedRead(false, 1000, 100, 1010, 60);
+        final AlignmentStateMachine state = new AlignmentStateMachine(read);
+        Assert.assertFalse(state.isBaseInsideAdaptor(1059));
+        Assert.assertTrue(state.isBaseInsideAdaptor(1060));
+        Assert.assertTrue(state.isBaseInsideAdaptor(1099));
+    }
+
+    @Test
+    public void reverseReadBasesBeforeTheMateStartAreInsideTheAdaptor() {
+        final GATKRead read = pairedRead(true, 1000, 100, 1020, 80);
+        final AlignmentStateMachine state = new AlignmentStateMachine(read);
+        Assert.assertTrue(state.isBaseInsideAdaptor(1019));
+        Assert.assertFalse(state.isBaseInsideAdaptor(1020));
+    }
+
+    @Test
+    public void reverseReadWithNegativeFragmentLengthHasAdaptorBasesBeforeTheMateStart() {
+        for (final int fragmentLength : Arrays.asList(-60, -300)) {
+            final AlignmentStateMachine state = new AlignmentStateMachine(pairedRead(true, 1000, 100, 1020, fragmentLength));
+            Assert.assertTrue(state.isBaseInsideAdaptor(1000), "fragment " + fragmentLength);
+            Assert.assertTrue(state.isBaseInsideAdaptor(1019), "fragment " + fragmentLength);
+            Assert.assertFalse(state.isBaseInsideAdaptor(1020), "fragment " + fragmentLength);
+            Assert.assertFalse(state.isBaseInsideAdaptor(1099), "fragment " + fragmentLength);
+        }
+    }
+
+    @Test
+    public void sameStrandPairsHaveNoAdaptorBases() {
+        final GATKRead read = pairedRead(false, 1000, 100, 1010, 60);
+        read.setMateIsReverseStrand(false);
+        assertNoAdaptorBases(read);
+    }
+
+    @Test
+    public void readsWithAnUnmappedMateHaveNoAdaptorBases() {
+        final GATKRead read = pairedRead(false, 1000, 100, 1010, 60);
+        read.setMateIsUnmapped();
+        assertNoAdaptorBases(read);
+    }
+
+    @Test
+    public void readsWithZeroFragmentLengthHaveNoAdaptorBases() {
+        assertNoAdaptorBases(pairedRead(false, 1000, 100, 1010, 0));
+    }
+
+    private static void assertNoAdaptorBases(final GATKRead read) {
+        final AlignmentStateMachine state = new AlignmentStateMachine(read);
+        for (int position = read.getStart(); position <= read.getEnd(); position++) {
+            Assert.assertFalse(state.isBaseInsideAdaptor(position), "position " + position);
+        }
+    }
+
+    @Test
+    public void readsWithoutAWellDefinedFragmentHaveNoAdaptorBases() {
+        final SAMFileHeader header = ArtificialReadUtils.createArtificialSamHeader(1, 1, 10000);
+        final GATKRead unpaired = ArtificialReadUtils.createArtificialRead(header, "read", 0, 1000, 100);
+        final AlignmentStateMachine state = new AlignmentStateMachine(unpaired);
+        for (int position = 1000; position < 1100; position++) {
+            Assert.assertFalse(state.isBaseInsideAdaptor(position));
+        }
+    }
+
+    @Test
+    public void longFragmentsHaveNoAdaptorBases() {
+        final GATKRead read = pairedRead(false, 1000, 100, 1200, 300);
+        final AlignmentStateMachine state = new AlignmentStateMachine(read);
+        for (int position = 1000; position < 1100; position++) {
+            Assert.assertFalse(state.isBaseInsideAdaptor(position));
+        }
+    }
+
+    @Test
+    public void adaptorCheckAgreesWithReadUtilsAcrossTheRead() {
+        for (final boolean reverse : Arrays.asList(false, true)) {
+            for (final int fragmentLength : Arrays.asList(40, 99, 100, 101, 250)) {
+                final GATKRead read = pairedRead(reverse, 1000, 100, reverse ? 1030 : 1010, fragmentLength);
+                final AlignmentStateMachine state = new AlignmentStateMachine(read);
+                for (int position = 990; position < 1110; position++) {
+                    Assert.assertEquals(state.isBaseInsideAdaptor(position), ReadUtils.isBaseInsideAdaptor(read, position),
+                            "reverse=" + reverse + " fragment=" + fragmentLength + " position=" + position);
+                }
+            }
+        }
     }
 }
