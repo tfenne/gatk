@@ -3,6 +3,7 @@ package org.broadinstitute.hellbender.utils.variant.writers;
 import htsjdk.variant.variantcontext.*;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.GATKBaseTest;
+import org.broadinstitute.hellbender.utils.MathUtils;
 import org.broadinstitute.hellbender.utils.variant.HomoSapiensConstants;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
@@ -11,6 +12,7 @@ import org.testng.annotations.Test;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Random;
 
 public class HomRefBlockUnitTest extends GATKBaseTest {
     private static final String SAMPLE_NAME = "foo";
@@ -213,5 +215,61 @@ public class HomRefBlockUnitTest extends GATKBaseTest {
     @Test(expectedExceptions = IllegalArgumentException.class)
     public void testConstructorThrowsOnUpperGQBoundTooLarge() {
         final GVCFBlock block = new HomRefBlock(getVariantContext(), 90, 101, HomoSapiensConstants.DEFAULT_PLOIDY);
+    }
+
+    private static HomRefBlock blockWithDepths(final int... depths) {
+        final VariantContext vc = getVariantContext();
+        final HomRefBlock block = new HomRefBlock(new VariantContextBuilder(vc).genotypes(getValidGenotypeBuilder().DP(depths[0]).make()).make(), 0, 100, HomoSapiensConstants.DEFAULT_PLOIDY);
+        for (int i = 1; i < depths.length; i++) {
+            block.add(vc.getStart() + i, getValidGenotypeBuilder().DP(depths[i]).make());
+        }
+        return block;
+    }
+
+    @Test
+    public void medianDPOfAnOddCountIsTheMiddleDepth() {
+        Assert.assertEquals(blockWithDepths(9, 3, 30).getMedianDP(), 9);
+    }
+
+    @Test
+    public void medianDPOfAnEvenCountAveragesTheMiddleDepthsRoundingHalfUp() {
+        Assert.assertEquals(blockWithDepths(4, 8).getMedianDP(), 6);
+        Assert.assertEquals(blockWithDepths(4, 7).getMedianDP(), 6);
+        Assert.assertEquals(blockWithDepths(30, 1, 2, 7).getMedianDP(), 5);
+    }
+
+    @Test
+    public void medianDPOfLargeDepthsDoesNotOverflow() {
+        Assert.assertEquals(blockWithDepths(Integer.MAX_VALUE - 1, Integer.MAX_VALUE).getMedianDP(), Integer.MAX_VALUE);
+        Assert.assertEquals(blockWithDepths(2_000_000_000, 2_000_000_000).getMedianDP(), 2_000_000_000);
+        Assert.assertEquals(blockWithDepths(1_500_000_000, 2_000_000_001).getMedianDP(), 1_750_000_001);
+    }
+
+    @Test(expectedExceptions = IllegalArgumentException.class)
+    public void medianDPOfABlockWithoutDepthsIsRejected() {
+        final VariantContext vc = getVariantContext();
+        final HomRefBlock block = new HomRefBlock(new VariantContextBuilder(vc).genotypes(getValidGenotypeBuilder().noDP().make()).make(), 0, 100, HomoSapiensConstants.DEFAULT_PLOIDY);
+        block.getMedianDP();
+    }
+
+    @Test
+    public void medianDPOfASingleSiteIsItsDepth() {
+        Assert.assertEquals(blockWithDepths(17).getMedianDP(), 17);
+    }
+
+    @Test
+    public void medianDPMatchesTheRoundedStatisticalMedian() {
+        final Random rng = new Random(5);
+        for (int trial = 0; trial < 200; trial++) {
+            final int[] depths = new int[1 + rng.nextInt(12)];
+            for (int i = 0; i < depths.length; i++) {
+                depths[i] = rng.nextInt(60);
+            }
+            final List<Integer> boxed = new ArrayList<>();
+            for (final int depth : depths) {
+                boxed.add(depth);
+            }
+            Assert.assertEquals(blockWithDepths(depths).getMedianDP(), (int) Math.round(MathUtils.median(boxed)), Arrays.toString(depths));
+        }
     }
 }
