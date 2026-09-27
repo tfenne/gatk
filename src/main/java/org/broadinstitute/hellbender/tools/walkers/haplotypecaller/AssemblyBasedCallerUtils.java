@@ -208,7 +208,11 @@ public final class AssemblyBasedCallerUtils {
         Utils.nonNull(samplesList);
         Utils.nonNull(halfOfPcrSnvQual);
         Utils.nonNull(halfOfPcrSnvQual);
-        for ( final List<GATKRead> perSampleReadList : splitReadsBySample(samplesList, readsHeader, reads).values() ) {
+        // With a single sample every read belongs to it, so the per-sample split is the read list itself.
+        final Collection<List<GATKRead>> perSampleReadLists = samplesList.numberOfSamples() == 1
+                ? Collections.singletonList(reads)
+                : splitReadsBySample(samplesList, readsHeader, reads).values();
+        for ( final List<GATKRead> perSampleReadList : perSampleReadLists ) {
             final FragmentCollection<GATKRead> fragmentCollection = FragmentCollection.create(perSampleReadList);
             for ( final Pair<GATKRead, GATKRead> overlappingPair : fragmentCollection.getOverlappingPairs() ) {
                 FragmentUtils.adjustQualsOfOverlappingPairedFragments(overlappingPair, setConflictingToZero, halfOfPcrSnvQual, halfOfPcrIndelQual);
