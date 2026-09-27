@@ -120,6 +120,13 @@ final class ReadStateManager {
             firstAlignmentStart = firstState.getGenomePosition();
         }
 
+        // Most loci have no read starting at them. The partitioner's downsamplers were emptied and their stats
+        // reset when the previous batch was collected, and a cycle with nothing submitted draws no random
+        // numbers, so the end-of-input signal, per-sample collection and reset below would leave them as they are.
+        if ( ! readStartsAtCurrentPosition(iterator.peek(), firstContig, firstAlignmentStart) ) {
+            return;
+        }
+
         while ( iterator.hasNext() && readStartsAtCurrentPosition(iterator.peek(), firstContig, firstAlignmentStart) ) {
             submitRead(iterator.next());
         }

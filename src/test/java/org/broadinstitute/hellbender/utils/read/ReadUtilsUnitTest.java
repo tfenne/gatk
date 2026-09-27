@@ -219,6 +219,41 @@ public final class ReadUtilsUnitTest extends GATKBaseTest {
         };
     }
 
+    private static GATKRead pairedReadAt1000(final boolean reverseStrand, final int mateStart, final int fragmentLength) {
+        final GATKRead read = ArtificialReadUtils.createArtificialRead(ArtificialReadUtils.createArtificialSamHeader(), "read", 0, 1000, 100);
+        read.setIsPaired(true);
+        read.setIsReverseStrand(reverseStrand);
+        read.setMateIsReverseStrand(!reverseStrand);
+        read.setMatePosition(read.getContig(), mateStart);
+        read.setFragmentLength(fragmentLength);
+        return read;
+    }
+
+    @Test
+    public void forwardReadBasesFromTheFragmentEndAreInsideTheAdaptor() {
+        final GATKRead read = pairedReadAt1000(false, 1010, 60);
+        Assert.assertFalse(ReadUtils.isBaseInsideAdaptor(read, 1059));
+        Assert.assertTrue(ReadUtils.isBaseInsideAdaptor(read, 1060));
+        Assert.assertTrue(ReadUtils.isBaseInsideAdaptor(read, 1099));
+    }
+
+    @Test
+    public void reverseReadBasesBeforeTheMateStartAreInsideTheAdaptor() {
+        final GATKRead read = pairedReadAt1000(true, 1020, -80);
+        Assert.assertTrue(ReadUtils.isBaseInsideAdaptor(read, 1019));
+        Assert.assertFalse(ReadUtils.isBaseInsideAdaptor(read, 1020));
+    }
+
+    @Test
+    public void longFragmentsAndUnpairedReadsHaveNoBasesInsideTheAdaptor() {
+        final GATKRead longFragment = pairedReadAt1000(false, 1200, 300);
+        final GATKRead unpaired = ArtificialReadUtils.createArtificialRead(ArtificialReadUtils.createArtificialSamHeader(), "read", 0, 1000, 100);
+        for (int position = 1000; position < 1100; position++) {
+            Assert.assertFalse(ReadUtils.isBaseInsideAdaptor(longFragment, position));
+            Assert.assertFalse(ReadUtils.isBaseInsideAdaptor(unpaired, position));
+        }
+    }
+
     @Test(dataProvider = "readCoordinateForReferenceCoordinate")
     public void testGetReadCoordinateForReferenceCoordinate(final String cigar, final int start, final int refCoord, final int expected, final CigarOperator op) {
         final Cigar decoded = TextCigarCodec.decode(cigar);

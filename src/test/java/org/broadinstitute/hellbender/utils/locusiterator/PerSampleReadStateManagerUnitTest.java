@@ -129,4 +129,21 @@ public final class PerSampleReadStateManagerUnitTest extends LocusIteratorByStat
     public void runPerSampleReadStateManagerTest( PerSampleReadStateManagerTester test ) {
         test.run();
     }
+
+    @Test
+    public void getReturnsStatesInAlignmentStartOrder() {
+        final PerSampleReadStateManager manager = new PerSampleReadStateManager("sample", LocusIteratorByState.NO_DOWNSAMPLING);
+        final List<AlignmentStateMachine> states = new ArrayList<>();
+        for (final int start : Arrays.asList(10, 10, 12, 15)) {
+            final GATKRead read = ArtificialReadUtils.createArtificialRead(ArtificialReadUtils.createArtificialSamHeader(), "read" + states.size(), 0, start, 20);
+            states.add(new AlignmentStateMachine(read));
+        }
+        manager.addStatesAtNextAlignmentStart(new LinkedList<>(states.subList(0, 2)));
+        manager.addStatesAtNextAlignmentStart(new LinkedList<>(states.subList(2, 3)));
+        manager.addStatesAtNextAlignmentStart(new LinkedList<>(states.subList(3, 4)));
+        Assert.assertEquals(manager.size(), 4);
+        for (int i = 0; i < states.size(); i++) {
+            Assert.assertSame(manager.get(i), states.get(i));
+        }
+    }
 }

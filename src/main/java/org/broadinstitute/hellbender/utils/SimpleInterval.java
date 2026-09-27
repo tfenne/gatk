@@ -57,7 +57,9 @@ public final class SimpleInterval implements Locatable, Serializable {
      * @throws IllegalArgumentException if it is invalid
      */
     static void validatePositions(final String contig, final int start, final int end) {
-        Utils.validateArg(isValid(contig, start, end), () -> "Invalid interval. Contig:" + contig + " start:"+start + " end:" + end);
+        if (!isValid(contig, start, end)) {
+            throw new IllegalArgumentException("Invalid interval. Contig:" + contig + " start:" + start + " end:" + end);
+        }
     }
 
      /**
