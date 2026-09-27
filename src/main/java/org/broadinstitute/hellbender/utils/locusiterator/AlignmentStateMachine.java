@@ -1,6 +1,5 @@
 package org.broadinstitute.hellbender.utils.locusiterator;
 
-import htsjdk.samtools.Cigar;
 import htsjdk.samtools.CigarElement;
 import htsjdk.samtools.CigarOperator;
 import org.broadinstitute.hellbender.exceptions.UserException;
@@ -8,6 +7,8 @@ import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.pileup.PileupElement;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
+
+import java.util.List;
 
 /**
  * Steps a single read along its alignment to the genome
@@ -23,7 +24,14 @@ public final class AlignmentStateMachine {
      * Our read
      */
     private final GATKRead read;
-    private final Cigar cigar;
+
+    /**
+     * The elements of the read's cigar as of construction. The count is taken from this list rather than from
+     * {@link GATKRead#numCigarElements()} because a BAM record whose cigar is stored in the CG tag reports the
+     * two-element placeholder's length there. The list is a view of the Cigar object current at construction; a
+     * later setCigar on the read replaces that object and does not affect this machine.
+     */
+    private final List<CigarElement> cigarElements;
     private final int nCigarElements;
     private int currentCigarElementOffset = -1;
 
@@ -49,8 +57,8 @@ public final class AlignmentStateMachine {
 
     public AlignmentStateMachine(final GATKRead read) {
         this.read = read;
-        this.cigar = read.getCigar();
-        this.nCigarElements = cigar.numCigarElements();
+        this.cigarElements = read.getCigarElements();
+        this.nCigarElements = cigarElements.size();
         initializeAsLeftEdge();
     }
 
@@ -232,7 +240,7 @@ public final class AlignmentStateMachine {
             if (currentElement == null || (offsetIntoCurrentCigarElement + 1) >= currentElement.getLength()) {
                 currentCigarElementOffset++;
                 if (currentCigarElementOffset < nCigarElements) {
-                    currentElement = cigar.getCigarElement(currentCigarElementOffset);
+                    currentElement = cigarElements.get(currentCigarElementOffset);
                     offsetIntoCurrentCigarElement = -1;
                     // next line: guards against cigar elements of length 0; when new cigar element is retrieved,
                     // we reenter in order to re-check offsetIntoCurrentCigarElement against currentElement's length

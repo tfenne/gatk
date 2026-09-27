@@ -319,10 +319,13 @@ public final class CigarUtils {
     /**
      * replace soft clips (S) with match (M) operators, normalizing the result by all the transformations of the {@link CigarBuilder} class:
      * merging consecutive identical operators and removing zero-length elements.  For example 10S10M -> 20M and 10S10M10I10I -> 20M20I.
+     *
+     * @param originalElements the cigar to revert, or its elements, which are not modified
+     * @return a new cigar with the soft clips reverted
      */
-    public static Cigar revertSoftClips(final Cigar originalCigar) {
+    public static Cigar revertSoftClips(final Iterable<CigarElement> originalElements) {
         final CigarBuilder builder = new CigarBuilder();
-        for (final CigarElement element : originalCigar.getCigarElements()) {
+        for (final CigarElement element : originalElements) {
             if (element.getOperator() == CigarOperator.SOFT_CLIP) {
                 builder.add(new CigarElement(element.getLength(), CigarOperator.MATCH_OR_MISMATCH));
             } else {
@@ -334,19 +337,21 @@ public final class CigarUtils {
     }
 
     /**
-     * Given a cigar string, soft clip up to leftClipEnd and soft clip starting at rightClipBegin
+     * Given a cigar, clip the read bases from start up to stop with the given clipping operator
+     * @param cigarElements the cigar to clip, or its elements, which are not modified
      * @param start initial index to clip within read bases, inclusive
      * @param stop final index to clip within read bases exclusive
      * @param clippingOperator      type of clipping -- must be either hard clip or soft clip
+     * @return a new cigar with the clipped bases replaced by the clipping operator
      */
-    public static Cigar clipCigar(final Cigar cigar, final int start, final int stop, CigarOperator clippingOperator) {
+    public static Cigar clipCigar(final Iterable<CigarElement> cigarElements, final int start, final int stop, final CigarOperator clippingOperator) {
         Utils.validateArg(clippingOperator.isClipping(), "Not a clipping operator");
         final boolean clipLeft = start == 0;
 
         final CigarBuilder newCigar = new CigarBuilder();
 
         int elementStart = 0;
-        for (final CigarElement element : cigar.getCigarElements()) {
+        for (final CigarElement element : cigarElements) {
             final CigarOperator operator = element.getOperator();
             // copy hard clips
             if (operator == CigarOperator.HARD_CLIP) {
@@ -385,12 +390,16 @@ public final class CigarUtils {
 
     /**
      * How many bases to the right does a read's alignment start shift given its cigar and the number of left soft clips
+     *
+     * @param cigarElements the read's cigar before clipping, or its elements
+     * @param numClipped the number of read bases clipped from the left
+     * @return the number of reference bases the alignment start moves right
      */
-    public static int alignmentStartShift(final Cigar cigar, final int numClipped) {
+    public static int alignmentStartShift(final Iterable<CigarElement> cigarElements, final int numClipped) {
         int refBasesClipped = 0;
 
         int elementStart = 0;   // this and elementEnd are indices in the read's bases
-        for (final CigarElement element : cigar.getCigarElements()) {
+        for (final CigarElement element : cigarElements) {
             final CigarOperator operator = element.getOperator();
             // hard clips consume neither read bases nor reference bases and are irrelevant
             if (operator == CigarOperator.HARD_CLIP) {

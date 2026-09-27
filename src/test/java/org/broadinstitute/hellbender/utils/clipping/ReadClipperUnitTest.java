@@ -471,4 +471,55 @@ public final class ReadClipperUnitTest extends GATKBaseTest {
         Assert.assertEquals(clippedRead.numCigarElements(), 0);
         Assert.assertTrue(clippedRead.isUnmapped());
     }
+
+    /** A read with the given cigar whose alignment starts at 100. */
+    private static GATKRead readAt100(final String cigar) {
+        final GATKRead read = ReadClipperTestUtils.makeReadFromCigar(cigar);
+        read.setPosition(read.getContig(), 100);
+        return read;
+    }
+
+    @Test
+    public void softClipFromLeftShiftsStartPastDeletionAtClipBoundary() {
+        final GATKRead clipped = ReadClipper.softClipByReadCoordinates(readAt100("2S3M2D5M"), 0, 4);
+        Assert.assertEquals(clipped.getCigar().toString(), "5S5M");
+        Assert.assertEquals(clipped.getStart(), 105);
+    }
+
+    @Test
+    public void softClipFromLeftShiftsStartPastDeletionInsideClip() {
+        final GATKRead clipped = ReadClipper.softClipByReadCoordinates(readAt100("2M2D6M"), 0, 2);
+        Assert.assertEquals(clipped.getCigar().toString(), "3S5M");
+        Assert.assertEquals(clipped.getStart(), 105);
+    }
+
+    @Test
+    public void softClipFromLeftKeepsLeadingHardClip() {
+        final GATKRead clipped = ReadClipper.softClipByReadCoordinates(readAt100("3H10M"), 0, 3);
+        Assert.assertEquals(clipped.getCigar().toString(), "3H4S6M");
+        Assert.assertEquals(clipped.getStart(), 104);
+    }
+
+    @Test
+    public void softClipFromLeftExtendsExistingSoftClip() {
+        final GATKRead clipped = ReadClipper.softClipByReadCoordinates(readAt100("2H3S5M"), 0, 4);
+        Assert.assertEquals(clipped.getCigar().toString(), "2H5S3M");
+        Assert.assertEquals(clipped.getStart(), 102);
+    }
+
+    @Test
+    public void softClipFromLeftShiftsStartOfReverseStrandRead() {
+        final GATKRead read = readAt100("2S3M2D5M");
+        read.setIsReverseStrand(true);
+        final GATKRead clipped = ReadClipper.softClipByReadCoordinates(read, 0, 4);
+        Assert.assertEquals(clipped.getCigar().toString(), "5S5M");
+        Assert.assertEquals(clipped.getStart(), 105);
+    }
+
+    @Test
+    public void softClipFromRightLeavesStartUnchanged() {
+        final GATKRead clipped = ReadClipper.softClipByReadCoordinates(readAt100("10M"), 7, 9);
+        Assert.assertEquals(clipped.getCigar().toString(), "7M3S");
+        Assert.assertEquals(clipped.getStart(), 100);
+    }
 }
