@@ -7,9 +7,13 @@ import htsjdk.variant.variantcontext.*;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.mutable.MutableInt;
 import org.apache.commons.lang3.tuple.Pair;
+import org.apache.logging.log4j.LogManager;
 import org.broadinstitute.hellbender.GATKBaseTest;
 import org.broadinstitute.gatk.nativebindings.smithwaterman.SWParameters;
 import org.broadinstitute.hellbender.engine.AssemblyRegion;
+import org.broadinstitute.hellbender.tools.FlowBasedArgumentCollection;
+import org.broadinstitute.hellbender.utils.fasta.CachingIndexedFastaSequenceFile;
+import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
 import org.broadinstitute.hellbender.utils.BaseUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
@@ -78,6 +82,68 @@ public class AssemblyBasedCallerUtilsUnitTest extends GATKBaseTest {
         // make sure that the original reads are not changed due to finalizeRegion()
         Assert.assertTrue(reads.get(0).convertToSAMRecord(header).equals(orgRead0));
         Assert.assertTrue(reads.get(1).convertToSAMRecord(header).equals(orgRead1));
+    }
+
+    /** An overlapping mate pair from one fragment whose overlapping bases disagree, so overlap cleanup changes their qualities. */
+    private static List<GATKRead> overlappingMatesWithConflicts(final SAMFileHeader header) {
+        final SAMLineParser parser = new SAMLineParser(header);
+        final SAMRecord first = parser.parseLine("HWI-ST807:461:C2P0JACXX:4:2204:18080:5857\t83\t1\t42596803\t39\t1S95M5S\t=\t42596891\t-7\tGAATCATCATCAAATGGAATCTAATGGAATCATTGAACAGAATTGAATGGAATCGTCATCGAATGAATTGAATGCAATCATCGAATGGTCTCGAATAGAAT\tDAAAEDCFCCGEEDDBEDDDGCCDEDECDDFDCEECCFEECDCEDBCDBDBCC>DCECC>DBCDDBCBDDBCDDEBCCECC>DBCDBDBGC?FCCBDB>>?\tRG:Z:tumor");
+        final SAMRecord second = parser.parseLine("HWI-ST807:461:C2P0JACXX:4:2204:18080:5857\t163\t1\t42596891\t39\t101M\t=\t42596803\t7\tCTCGAATGGAATCATTTTCTACTGGAAAGGAATGGAATCATCGCATAGAATCGAATGGAATTAACATGGAATGGAATCGAATGTAATCATCATCAAATGGA\t>@>:ABCDECCCEDCBBBDDBDDEBCCBEBBCBEBCBCDDCD>DECBGCDCF>CCCFCDDCBABDEDFCDCDFFDDDG?DDEGDDFDHFEGDDGECB@BAA\tRG:Z:tumor");
+        return new ArrayList<>(Arrays.asList(new SAMRecordToGATKReadAdapter(first), new SAMRecordToGATKReadAdapter(second)));
+    }
+
+    @Test
+    public void cleanOverlappingReadPairsAdjustsASingleSampleLikeAMultiSampleSplit() {
+        final SAMFileHeader header = ArtificialReadUtils.createArtificialSamHeader(1, 1, 100000000);
+        for (final String sample : Arrays.asList("tumor", "normal")) {
+            final SAMReadGroupRecord readGroup = new SAMReadGroupRecord(sample);
+            readGroup.setSample(sample);
+            header.addReadGroup(readGroup);
+        }
+        final List<GATKRead> singleSampleReads = overlappingMatesWithConflicts(header);
+        final List<GATKRead> multiSampleReads = overlappingMatesWithConflicts(header);
+        final List<GATKRead> untouched = overlappingMatesWithConflicts(header);
+
+        AssemblyBasedCallerUtils.cleanOverlappingReadPairs(singleSampleReads, SampleList.singletonSampleList("tumor"), header, true, OptionalInt.empty(), OptionalInt.empty());
+        AssemblyBasedCallerUtils.cleanOverlappingReadPairs(multiSampleReads, new IndexedSampleList(Arrays.asList("tumor", "normal")), header, true, OptionalInt.empty(), OptionalInt.empty());
+
+        for (int i = 0; i < untouched.size(); i++) {
+            Assert.assertEquals(singleSampleReads.get(i).getBaseQualities(), multiSampleReads.get(i).getBaseQualities(), "read " + i);
+            Assert.assertNotEquals(singleSampleReads.get(i).getBaseQualities(), untouched.get(i).getBaseQualities(), "read " + i);
+        }
+    }
+
+    /** Assembles reference-matching reads over a small region of hg19mini and returns the finalized region. */
+    private static AssemblyRegion assembleReferenceReads(final boolean usePileupDetection) {
+        try (final CachingIndexedFastaSequenceFile reference = new CachingIndexedFastaSequenceFile(IOUtils.getPath(hg19MiniReference))) {
+            final SAMFileHeader header = ArtificialReadUtils.createArtificialSamHeader(reference.getSequenceDictionary());
+            final SAMReadGroupRecord readGroup = new SAMReadGroupRecord("rg");
+            readGroup.setSample("sample");
+            header.addReadGroup(readGroup);
+            final AssemblyRegion region = new AssemblyRegion(new SimpleInterval("1", 1000, 1300), 100, header);
+            for (int start = 1000; start <= 1200; start += 20) {
+                final byte[] bases = reference.getSubsequenceAt("1", start, start + 99).getBases();
+                final GATKRead read = ArtificialReadUtils.createArtificialRead(header, "read" + start, 0, start, bases, Utils.dupBytes((byte) 30, bases.length), "100M");
+                read.setReadGroup(readGroup.getId());
+                region.add(read);
+            }
+            final HaplotypeCallerArgumentCollection args = new HaplotypeCallerArgumentCollection();
+            args.pileupDetectionArgs.usePileupDetection = usePileupDetection;
+            AssemblyBasedCallerUtils.assembleReads(region, args, header, SampleList.singletonSampleList("sample"), LogManager.getLogger(AssemblyBasedCallerUtilsUnitTest.class),
+                    reference, args.createReadThreadingAssembler(), SmithWatermanAligner.getAligner(SmithWatermanAligner.Implementation.JAVA), true, new FlowBasedArgumentCollection(), false);
+            return region;
+        }
+    }
+
+    @Test
+    public void assembleReadsTracksHardClippedReadsOnlyForPileupDetection() {
+        final AssemblyRegion withoutPileupDetection = assembleReferenceReads(false);
+        Assert.assertEquals(withoutPileupDetection.getReads().size(), 11);
+        Assert.assertTrue(withoutPileupDetection.getHardClippedPileupReads().isEmpty());
+
+        final AssemblyRegion withPileupDetection = assembleReferenceReads(true);
+        Assert.assertEquals(withPileupDetection.getReads().size(), 11);
+        Assert.assertEquals(withPileupDetection.getHardClippedPileupReads().size(), 11);
     }
 
     // ------------------------------------------------------------------------

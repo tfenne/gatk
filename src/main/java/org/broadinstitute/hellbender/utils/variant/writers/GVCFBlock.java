@@ -6,10 +6,10 @@ import htsjdk.variant.variantcontext.Genotype;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.variantcontext.VariantContextBuilder;
 import htsjdk.variant.vcf.VCFConstants;
-import org.broadinstitute.hellbender.utils.MathUtils;
 import org.broadinstitute.hellbender.utils.Utils;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -74,10 +74,24 @@ public abstract class GVCFBlock implements Locatable {
         return Collections.min(DPs);
     }
 
-    /** Get the median DP observed within this band
-     * If there are an even number of DPs recorded in this band the median is the mean of the two middle values */
+    /**
+     * Get the median DP observed within this band.
+     * If there are an even number of DPs recorded in this band the median is the mean of the two middle values,
+     * rounded half up.
+     *
+     * @return the median depth
+     * @throws IllegalArgumentException if no DP values have been recorded
+     */
     public int getMedianDP() {
-        return (int) Math.round(MathUtils.median(DPs));
+        Utils.validateArg(!DPs.isEmpty(), "cannot take the median of a block with no DP values");
+        final int[] sorted = new int[DPs.size()];
+        for (int i = 0; i < sorted.length; i++) {
+            sorted[i] = DPs.get(i);
+        }
+        Arrays.sort(sorted);
+        final int middle = sorted.length / 2;
+        // The two middle depths are summed as longs so that large depths cannot overflow the sum.
+        return sorted.length % 2 == 1 ? sorted[middle] : (int) Math.round(((long) sorted[middle - 1] + sorted[middle]) / 2.0);
     }
 
     int getGQUpperBound() {
