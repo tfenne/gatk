@@ -175,7 +175,7 @@ public final class AssemblyBasedCallerUtils {
         if (read.getStart() <= read.getEnd() && !read.isUnmapped()) {
             final GATKRead adaptorClippedRead = ReadClipper.hardClipAdaptorSequence(read);
 
-            if (!adaptorClippedRead.isEmpty() && adaptorClippedRead.getCigar().getReadLength() > 0) {
+            if (!adaptorClippedRead.isEmpty() && Cigar.getReadLength(adaptorClippedRead.getCigarElements()) > 0) {
                 final GATKRead adaptorAndRegionClippedRead = ReadClipper.hardClipToRegion(adaptorClippedRead, region.getPaddedSpan().getStart(), region.getPaddedSpan().getEnd());
 
                 if (adaptorAndRegionClippedRead.getStart() <= adaptorAndRegionClippedRead.getEnd() && adaptorAndRegionClippedRead.getLength() > 0 && adaptorClippedRead.overlaps(region.getPaddedSpan())) {

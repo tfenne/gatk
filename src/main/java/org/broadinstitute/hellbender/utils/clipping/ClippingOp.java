@@ -94,11 +94,12 @@ public final class ClippingOp {
         final int myStop = Math.min(stop, start + readCopied.getLength() - 2);
         Utils.validate(start <= 0 || myStop == readCopied.getLength() - 1, () -> String.format("Cannot apply soft clipping operator to the middle of a read: %s to be clipped at %d-%d", readCopied.getName(), start, myStop));
 
-        final Cigar oldCigar = readCopied.getCigar();
-        final Cigar newCigar = CigarUtils.clipCigar(oldCigar, start, myStop + 1, CigarOperator.SOFT_CLIP);
+        // Both derived values are taken from the unclipped cigar before the read's cigar is replaced.
+        final List<CigarElement> oldCigarElements = readCopied.getCigarElements();
+        final Cigar newCigar = CigarUtils.clipCigar(oldCigarElements, start, myStop + 1, CigarOperator.SOFT_CLIP);
+        final int alignmentStartShift = start == 0 ? CigarUtils.alignmentStartShift(oldCigarElements, stop + 1) : 0;
         readCopied.setCigar(newCigar);
 
-        final int alignmentStartShift = start == 0 ? CigarUtils.alignmentStartShift(oldCigar, stop + 1) : 0;
         final int newStart = readCopied.getStart() + alignmentStartShift;
         readCopied.setPosition(readCopied.getContig(), newStart);
         return readCopied;
@@ -121,13 +122,12 @@ public final class ClippingOp {
     }
 
     private GATKRead applyRevertSoftClippedBases(final GATKRead read) {
-        final Cigar originalCigar = read.getCigar();
-        final List<CigarElement> originalElements = originalCigar.getCigarElements();
+        final List<CigarElement> originalElements = read.getCigarElements();
         if (originalElements.isEmpty() || !(originalElements.get(0).getOperator().isClipping() || originalElements.get(originalElements.size() - 1).getOperator().isClipping())) {
             return read;
         }
         GATKRead unclipped = read.copy();
-        final Cigar unclippedCigar = CigarUtils.revertSoftClips(originalCigar);
+        final Cigar unclippedCigar = CigarUtils.revertSoftClips(originalElements);
         unclipped.setCigar(unclippedCigar);
 
         final int newStart = read.getSoftStart();
@@ -191,8 +191,8 @@ public final class ClippingOp {
 
         // If the read is unmapped there is no Cigar string and neither should we create a new cigar string
 
-        final Cigar cigar = read.getCigar();//Get the cigar once to avoid multiple calls because each makes a copy of the cigar
-        final Cigar newCigar = read.isUnmapped() ? new Cigar() : CigarUtils.clipCigar(cigar, start, stop + 1, CigarOperator.HARD_CLIP);
+        final List<CigarElement> cigarElements = read.getCigarElements();
+        final Cigar newCigar = read.isUnmapped() ? new Cigar() : CigarUtils.clipCigar(cigarElements, start, stop + 1, CigarOperator.HARD_CLIP);
 
         final byte[] newBases = new byte[newLength];
         final byte[] newQuals = new byte[newLength];
@@ -208,7 +208,7 @@ public final class ClippingOp {
         hardClippedRead.setBases(newBases);
         hardClippedRead.setCigar(newCigar);
         if (start == 0 && !read.isUnmapped()) {
-            hardClippedRead.setPosition(read.getContig(), read.getStart() + CigarUtils.alignmentStartShift(cigar, stop + 1));
+            hardClippedRead.setPosition(read.getContig(), read.getStart() + CigarUtils.alignmentStartShift(cigarElements, stop + 1));
         }
 
         if (ReadUtils.hasBaseIndelQualities(read)) {

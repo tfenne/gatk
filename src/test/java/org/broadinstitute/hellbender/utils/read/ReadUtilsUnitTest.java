@@ -221,9 +221,13 @@ public final class ReadUtilsUnitTest extends GATKBaseTest {
 
     @Test(dataProvider = "readCoordinateForReferenceCoordinate")
     public void testGetReadCoordinateForReferenceCoordinate(final String cigar, final int start, final int refCoord, final int expected, final CigarOperator op) {
-        final Pair<Integer, CigarOperator> result = ReadUtils.getReadIndexForReferenceCoordinate(start, TextCigarCodec.decode(cigar), refCoord);
+        final Cigar decoded = TextCigarCodec.decode(cigar);
+        final Pair<Integer, CigarOperator> result = ReadUtils.getReadIndexForReferenceCoordinate(start, decoded, refCoord);
         Assert.assertEquals(result.getLeft().intValue(), expected);
         Assert.assertEquals(result.getRight(), op);
+        final Pair<Integer, CigarOperator> fromElements = ReadUtils.getReadIndexForReferenceCoordinate(start, decoded.getCigarElements(), refCoord);
+        Assert.assertEquals(fromElements.getLeft().intValue(), expected);
+        Assert.assertEquals(fromElements.getRight(), op);
     }
 
     @Test

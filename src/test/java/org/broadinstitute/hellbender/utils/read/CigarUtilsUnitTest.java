@@ -375,7 +375,9 @@ public final class CigarUtilsUnitTest {
 
     @Test(dataProvider = "revert_soft_clips")
     public void testRevertSoftClips(final String original, final String expected) {
-        Assert.assertEquals(CigarUtils.revertSoftClips(TextCigarCodec.decode(original)).toString(), expected);
+        final Cigar cigar = TextCigarCodec.decode(original);
+        Assert.assertEquals(CigarUtils.revertSoftClips(cigar).toString(), expected);
+        Assert.assertEquals(CigarUtils.revertSoftClips(cigar.getCigarElements()).toString(), expected);
     }
 
     @DataProvider(name = "clip_cigar")
@@ -410,8 +412,11 @@ public final class CigarUtilsUnitTest {
 
     @Test(dataProvider = "clip_cigar")
     public void testClipCigar(final String original, final int start, final int stop, final String expectedSoftClip, final String expectedHardClip) {
-        Assert.assertEquals(CigarUtils.clipCigar(TextCigarCodec.decode(original), start, stop, CigarOperator.SOFT_CLIP).toString(), expectedSoftClip);
-        Assert.assertEquals(CigarUtils.clipCigar(TextCigarCodec.decode(original), start, stop, CigarOperator.HARD_CLIP).toString(), expectedHardClip);
+        final Cigar cigar = TextCigarCodec.decode(original);
+        Assert.assertEquals(CigarUtils.clipCigar(cigar, start, stop, CigarOperator.SOFT_CLIP).toString(), expectedSoftClip);
+        Assert.assertEquals(CigarUtils.clipCigar(cigar, start, stop, CigarOperator.HARD_CLIP).toString(), expectedHardClip);
+        Assert.assertEquals(CigarUtils.clipCigar(cigar.getCigarElements(), start, stop, CigarOperator.SOFT_CLIP).toString(), expectedSoftClip);
+        Assert.assertEquals(CigarUtils.clipCigar(cigar.getCigarElements(), start, stop, CigarOperator.HARD_CLIP).toString(), expectedHardClip);
     }
 
     @DataProvider(name = "alignment_start_shift")
@@ -439,8 +444,8 @@ public final class CigarUtilsUnitTest {
     @Test(dataProvider = "alignment_start_shift")
     public void testAlignmentStartShift(final String cigarString, final int numClips, final int expectedResult) {
         final Cigar cigar = TextCigarCodec.decode(cigarString);
-        final int actualResult = CigarUtils.alignmentStartShift(cigar, numClips);
-        Assert.assertEquals(actualResult, expectedResult);
+        Assert.assertEquals(CigarUtils.alignmentStartShift(cigar, numClips), expectedResult);
+        Assert.assertEquals(CigarUtils.alignmentStartShift(cigar.getCigarElements(), numClips), expectedResult);
     }
 
     @DataProvider(name = "readWalkDistanceTestDataException")
