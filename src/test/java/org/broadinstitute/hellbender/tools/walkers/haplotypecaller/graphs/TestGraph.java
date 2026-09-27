@@ -87,7 +87,7 @@ public final class TestGraph extends BaseGraph<MultiDeBruijnVertex, BaseEdge> {
         for( final BaseEdge e : edgeSet() ) {
             final SeqVertex seqOutV = vertexMap.get(getEdgeTarget(e));
             final SeqVertex seqInV = vertexMap.get(getEdgeSource(e));
-            seqGraph.addEdge(seqInV, seqOutV, e);
+            seqGraph.addEdge(seqInV, seqOutV, e.copy());
         }
 
         return seqGraph;

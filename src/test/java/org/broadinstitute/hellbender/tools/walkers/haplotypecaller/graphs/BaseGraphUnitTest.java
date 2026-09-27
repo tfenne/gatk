@@ -338,4 +338,76 @@ public final class BaseGraphUnitTest extends GATKBaseTest {
         Assert.assertEquals(g.outDegreeOf(a), 0);
         Assert.assertEquals(g.inDegreeOf(b), 0);
     }
+
+    @Test
+    public void addingAnEdgeThatAlreadyJoinsOtherVerticesIsRejected() {
+        final SeqGraph g = new SeqGraph(11);
+        final SeqVertex a = new SeqVertex("A");
+        final SeqVertex b = new SeqVertex("C");
+        final SeqVertex c = new SeqVertex("G");
+        g.addVertices(a, b, c);
+        final BaseEdge e = new BaseEdge(false, 1);
+        g.addEdge(a, b, e);
+        Assert.assertThrows(IllegalArgumentException.class, () -> g.addEdge(a, c, e));
+        Assert.assertSame(g.getEdgeTarget(e), b);
+        Assert.assertEquals(g.edgeSet().size(), 1);
+    }
+
+    @Test
+    public void anEdgeCanJoinTheSameVerticesInAnotherGraph() {
+        final SeqGraph g = new SeqGraph(11);
+        final SeqVertex a = new SeqVertex("A");
+        final SeqVertex b = new SeqVertex("C");
+        g.addVertices(a, b);
+        final BaseEdge e = new BaseEdge(false, 1);
+        g.addEdge(a, b, e);
+        final SeqGraph other = new SeqGraph(11);
+        other.addVertices(a, b);
+        Assert.assertTrue(other.addEdge(a, b, e));
+        Assert.assertSame(other.getEdgeSource(e), a);
+        Assert.assertSame(g.getEdgeTarget(e), b);
+    }
+
+    @Test
+    public void anEdgeRemovedFromAGraphCannotJoinOtherVertices() {
+        final SeqGraph g = new SeqGraph(11);
+        final SeqVertex a = new SeqVertex("A");
+        final SeqVertex b = new SeqVertex("C");
+        final SeqVertex c = new SeqVertex("G");
+        g.addVertices(a, b, c);
+        final BaseEdge e = new BaseEdge(false, 1);
+        g.addEdge(a, b, e);
+        g.removeEdge(e);
+        Assert.assertThrows(IllegalArgumentException.class, () -> g.addEdge(a, c, e));
+    }
+
+    @Test
+    public void aCopyOfAnEdgeCanJoinOtherVertices() {
+        final SeqGraph g = new SeqGraph(11);
+        final SeqVertex a = new SeqVertex("A");
+        final SeqVertex b = new SeqVertex("C");
+        final SeqVertex c = new SeqVertex("G");
+        g.addVertices(a, b, c);
+        final BaseEdge e = new BaseEdge(false, 1);
+        g.addEdge(a, b, e);
+        final BaseEdge copy = e.copy();
+        Assert.assertTrue(g.addEdge(a, c, copy));
+        Assert.assertSame(g.getEdgeTarget(copy), c);
+        Assert.assertSame(g.getEdgeTarget(e), b);
+    }
+
+    @Test
+    public void aDuplicateOfAnEdgeCanJoinOtherVertices() {
+        final SeqGraph g = new SeqGraph(11);
+        final SeqVertex a = new SeqVertex("A");
+        final SeqVertex b = new SeqVertex("C");
+        final SeqVertex c = new SeqVertex("G");
+        g.addVertices(a, b, c);
+        final BaseEdge e = new MultiSampleEdge(false, 3, 1);
+        g.addEdge(a, b, e);
+        final BaseEdge duplicate = e.duplicate();
+        Assert.assertTrue(g.addEdge(a, c, duplicate));
+        Assert.assertSame(g.getEdgeTarget(duplicate), c);
+        Assert.assertSame(g.getEdgeTarget(e), b);
+    }
 }

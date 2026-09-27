@@ -267,4 +267,66 @@ public class SharedVertexSequenceSplitterUnitTest extends GATKBaseTest {
         Assert.assertEquals(splitter.meetsMinMergableSequenceForSuffix(minSeqLength), suffixMeets, "Suffix failed");
         Assert.assertEquals(splitter.meetsMinMergableSequenceForEitherPrefixOrSuffix(minSeqLength), suffixMeets || prefixMeets, "Either prefix or suffix failed");
     }
+
+    @Test
+    public void updatingTheGraphLeavesTheSplitGraphEdgesJoiningTheirOwnVertices() {
+        // AAACCC is fully explained by the shared prefix AAA and suffix CCC, so the split graph has a prefix -> suffix edge
+        final SeqGraph graph = new SeqGraph(11);
+        final SeqVertex top = new SeqVertex("TTTTTTTT");
+        final SeqVertex bot = new SeqVertex("GGGGGGGG");
+        final List<SeqVertex> mids = Arrays.asList(new SeqVertex("AAACCC"), new SeqVertex("AAATCCC"), new SeqVertex("AAAGACCC"));
+        graph.addVertices(top, bot);
+        for ( final SeqVertex mid : mids ) {
+            graph.addVertex(mid);
+            graph.addEdge(top, mid);
+            graph.addEdge(mid, bot);
+        }
+
+        final SharedVertexSequenceSplitter splitter = new SharedVertexSequenceSplitter(graph, mids);
+        splitter.split();
+        final SeqGraph splitGraph = splitter.getSplitGraph();
+        final Map<BaseEdge, List<SeqVertex>> endpoints = new LinkedHashMap<>();
+        for ( final BaseEdge e : splitGraph.edgeSet() ) {
+            endpoints.put(e, Arrays.asList(splitGraph.getEdgeSource(e), splitGraph.getEdgeTarget(e)));
+        }
+        Assert.assertNotNull(splitGraph.getEdge(splitter.getPrefixV(), splitter.getSuffixV()));
+
+        splitter.updateGraph(top, bot);
+
+        for ( final Map.Entry<BaseEdge, List<SeqVertex>> entry : endpoints.entrySet() ) {
+            Assert.assertSame(splitGraph.getEdgeSource(entry.getKey()), entry.getValue().get(0));
+            Assert.assertSame(splitGraph.getEdgeTarget(entry.getKey()), entry.getValue().get(1));
+            Assert.assertFalse(graph.containsEdge(entry.getKey()), "outer graph should hold copies, not the split graph's edges");
+        }
+    }
+
+    @Test
+    public void updatingTheGraphKeepsThePerSampleStateOfTheSplitGraphEdges() {
+        // AAACCC is fully explained by the shared prefix AAA and suffix CCC, so the split graph's prefix -> suffix edge
+        // is built from the multi-sample edges into and out of it: multiplicity 3 + 4 but pruning multiplicity 3.
+        final SeqGraph graph = new SeqGraph(11);
+        final SeqVertex top = new SeqVertex("TTTTTTTT");
+        final SeqVertex bot = new SeqVertex("GGGGGGGG");
+        final List<SeqVertex> mids = Arrays.asList(new SeqVertex("AAACCC"), new SeqVertex("AAATCCC"), new SeqVertex("AAAGACCC"));
+        graph.addVertices(top, bot);
+        for ( final SeqVertex mid : mids ) {
+            graph.addVertex(mid);
+            graph.addEdge(top, mid, new MultiSampleEdge(false, 3, 1));
+            graph.addEdge(mid, bot, new MultiSampleEdge(false, 4, 1));
+        }
+
+        final SharedVertexSequenceSplitter splitter = new SharedVertexSequenceSplitter(graph, mids);
+        splitter.split();
+        final BaseEdge splitEdge = splitter.getSplitGraph().getEdge(splitter.getPrefixV(), splitter.getSuffixV());
+        Assert.assertEquals(splitEdge.getMultiplicity(), 7);
+        Assert.assertEquals(splitEdge.getPruningMultiplicity(), 3);
+
+        splitter.updateGraph(top, bot);
+
+        final BaseEdge outerEdge = graph.getEdge(splitter.getPrefixV(), splitter.getSuffixV());
+        Assert.assertNotSame(outerEdge, splitEdge);
+        Assert.assertEquals(outerEdge.getMultiplicity(), 7);
+        Assert.assertEquals(outerEdge.getPruningMultiplicity(), 3);
+        Assert.assertEquals(outerEdge.getDotLabel(), splitEdge.getDotLabel());
+    }
 }

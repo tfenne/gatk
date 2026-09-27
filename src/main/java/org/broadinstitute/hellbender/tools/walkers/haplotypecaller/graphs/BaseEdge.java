@@ -2,6 +2,7 @@ package org.broadinstitute.hellbender.tools.walkers.haplotypecaller.graphs;
 
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.param.ParamUtils;
+import org.jgrapht.graph.DefaultEdge;
 
 import java.util.Collection;
 import java.util.Comparator;
@@ -10,8 +11,15 @@ import java.util.Comparator;
  * Simple edge class for connecting nodes in the graph.
  *
  * Works equally well for all graph types (kmer or sequence)
+ *
+ * As a jgrapht {@link DefaultEdge} the edge stores its own source and target, so graphs look them up without a map.
+ * An edge object therefore joins one pair of vertices for its whole life, in every graph that holds it:
+ * {@link BaseGraph#addEdge(BaseVertex, BaseVertex, BaseEdge)} rejects an edge that already joins other vertices.
+ * To move an edge to other vertices, add its {@link #duplicate()}.
  */
-public class BaseEdge {
+public class BaseEdge extends DefaultEdge {
+    private static final long serialVersionUID = 1L;
+
     private int multiplicity;
     private boolean isRef;
 
@@ -28,10 +36,32 @@ public class BaseEdge {
     }
 
     /**
-     * Create a new copy of this BaseEdge
+     * Whether this edge already joins vertices other than {@code source} and {@code target}. It stays true after the
+     * edge is removed from a graph, because jgrapht does not clear an edge's stored endpoints.
+     */
+    boolean joinsOtherVertices(final Object source, final Object target) {
+        final Object currentSource = getSource();
+        return currentSource != null && (currentSource != source || getTarget() != target);
+    }
+
+    /** The vertices this edge joins, as "source -> target", for error messages. */
+    String describeJoinedVertices() {
+        return getSource() + " -> " + getTarget();
+    }
+
+    /**
+     * Create a new edge with this edge's reference flag and multiplicity, joining no vertices.
      */
     public BaseEdge copy() {
         return new BaseEdge(isRef(), getMultiplicity());
+    }
+
+    /**
+     * Create a new edge equal to this one in every respect, including any per-sample state a subclass keeps, joining
+     * no vertices. Use it to move an edge to other vertices.
+     */
+    public BaseEdge duplicate() {
+        return copy();
     }
 
     /**

@@ -199,33 +199,53 @@ public final class SharedVertexSequenceSplitter {
             addSuffixNodeAndEdges(bot);
         }
 
+        // The split graph's edges are duplicated into outer: an edge stores its endpoints, so it cannot join
+        // different vertices in the two graphs.
+        boolean prefixSuffixEdgeAdded = false;
         if ( topForConnect != null ) {
-            addEdgesFromTopNode(topForConnect, botForConnect);
+            prefixSuffixEdgeAdded = addEdgesFromTopNode(topForConnect, botForConnect);
         }
 
         if ( botForConnect != null ) {
-            addEdgesToBottomNode(botForConnect);
+            addEdgesToBottomNode(botForConnect, prefixSuffixEdgeAdded);
         }
     }
 
-    private void addEdgesToBottomNode(final SeqVertex botForConnect) {
+    /**
+     * Connects the split graph's edges into the suffix to {@code botForConnect}.
+     *
+     * @param prefixSuffixEdgeAdded whether {@link #addEdgesFromTopNode} already added the prefix -> suffix edge, which
+     *                              is then not added a second time
+     */
+    private void addEdgesToBottomNode(final SeqVertex botForConnect, final boolean prefixSuffixEdgeAdded) {
         for ( final BaseEdge e : splitGraph.incomingEdgesOf(getSuffixV()) ) {
-            outer.addEdge(splitGraph.getEdgeSource(e), botForConnect, e);
+            final SeqVertex source = splitGraph.getEdgeSource(e);
+            if ( ! (prefixSuffixEdgeAdded && source == getPrefixV()) ) {
+                outer.addEdge(source, botForConnect, e.duplicate());
+            }
         }
     }
 
-    private void addEdgesFromTopNode(final SeqVertex topForConnect, final SeqVertex botForConnect) {
+    /**
+     * Connects {@code topForConnect} to the targets of the split graph's edges out of the prefix, and to
+     * {@code botForConnect} in place of the prefix -> suffix edge (which is left out when {@code botForConnect} is null).
+     *
+     * @return whether the prefix -> suffix edge was added to outer
+     */
+    private boolean addEdgesFromTopNode(final SeqVertex topForConnect, final SeqVertex botForConnect) {
+        boolean prefixSuffixEdgeAdded = false;
         for ( final BaseEdge e : splitGraph.outgoingEdgesOf(getPrefixV()) ) {
             final SeqVertex target = splitGraph.getEdgeTarget(e);
 
             if ( target == getSuffixV()) { // going straight from prefix -> suffix
                 if ( botForConnect != null ) {
-                    outer.addEdge(topForConnect, botForConnect, e);
+                    prefixSuffixEdgeAdded = outer.addEdge(topForConnect, botForConnect, e.duplicate());
                 }
             } else {
-                outer.addEdge(topForConnect, target, e);
+                outer.addEdge(topForConnect, target, e.duplicate());
             }
         }
+        return prefixSuffixEdgeAdded;
     }
 
     private void addSuffixNodeAndEdges(final SeqVertex bot) {

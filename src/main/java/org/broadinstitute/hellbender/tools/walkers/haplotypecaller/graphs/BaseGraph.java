@@ -114,6 +114,23 @@ public abstract class BaseGraph<V extends BaseVertex, E extends BaseEdge> extend
     }
 
     /**
+     * Adds an edge from {@code source} to {@code target}, unless the graph already has an edge between them.
+     *
+     * An edge stores its endpoints (see {@link BaseEdge}), so an edge object that already joins other vertices, in
+     * this graph or another, is rejected rather than silently re-pointed wherever it is held.
+     *
+     * @throws IllegalArgumentException if {@code e} already joins vertices other than {@code source} and {@code target}
+     */
+    @Override
+    public boolean addEdge(final V source, final V target, final E e) {
+        if (e != null && e.joinsOtherVertices(source, target)) {
+            throw new IllegalArgumentException("edge " + e + " already joins " + e.describeJoinedVertices()
+                    + "; add its duplicate() to join " + source + " -> " + target);
+        }
+        return super.addEdge(source, target, e);
+    }
+
+    /**
      * @param v the vertex to test
      * @return  true if this vertex is a reference node (meaning that it appears on the reference path in the graph)
      */

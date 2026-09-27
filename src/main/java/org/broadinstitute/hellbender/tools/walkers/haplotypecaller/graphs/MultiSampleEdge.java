@@ -28,6 +28,7 @@ import java.util.PriorityQueue;
  * </pre>
  */
 public final class MultiSampleEdge extends BaseEdge {
+    private static final long serialVersionUID = 1L;
     private int currentSingleSampleMultiplicity;
     private final int singleSampleCapacity;
     private final PriorityQueue<Integer> singleSampleMultiplicities;
@@ -51,9 +52,24 @@ public final class MultiSampleEdge extends BaseEdge {
         this.singleSampleCapacity = singleSampleCapacity;
     }
 
+    /**
+     * Create a new edge with this edge's reference flag, multiplicity and sample capacity, as if its whole
+     * multiplicity had been seen in one sample: the per-sample multiplicities and reference path indexes are not
+     * copied. {@link #duplicate()} copies them too.
+     */
     @Override
     public MultiSampleEdge copy() {
-        return new MultiSampleEdge(isRef(), getMultiplicity(), singleSampleCapacity); // TODO -- should I copy values for other features?
+        return new MultiSampleEdge(isRef(), getMultiplicity(), singleSampleCapacity);
+    }
+
+    @Override
+    public MultiSampleEdge duplicate() {
+        final MultiSampleEdge duplicate = copy();
+        duplicate.currentSingleSampleMultiplicity = currentSingleSampleMultiplicity;
+        duplicate.singleSampleMultiplicities.clear();
+        duplicate.singleSampleMultiplicities.addAll(singleSampleMultiplicities);
+        duplicate.referencePathIndexes.addAll(referencePathIndexes);
+        return duplicate;
     }
 
     /**

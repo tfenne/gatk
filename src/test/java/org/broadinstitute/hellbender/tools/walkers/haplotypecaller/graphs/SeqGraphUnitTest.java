@@ -433,7 +433,7 @@ public final class SeqGraphUnitTest extends GATKBaseTest {
                         graph.addVertices(v);
                         graph.addEdge(v, a1, e);
                         expected.addVertex(v);
-                        expected.addEdge(v, acg, e);
+                        expected.addEdge(v, acg, e.copy());
                     }
 
                     for ( final SeqVertex v : makeVertices(nOutgoing) ) {
@@ -441,7 +441,7 @@ public final class SeqGraphUnitTest extends GATKBaseTest {
                         graph.addVertices(v);
                         graph.addEdge(g1, v, e);
                         expected.addVertex(v);
-                        expected.addEdge(acg, v, e);
+                        expected.addEdge(acg, v, e.copy());
                     }
 
                     tests.add(new Object[]{graph, expected});
