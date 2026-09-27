@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - 'master'
+      - 'high_performance_germline_calling'
   pull_request:
   workflow_dispatch:
 
