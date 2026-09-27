@@ -26,10 +26,13 @@ import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.genotyper.AlleleLikelihoods;
 import org.broadinstitute.hellbender.utils.genotyper.SampleList;
 import org.broadinstitute.hellbender.utils.haplotype.Haplotype;
+import org.broadinstitute.hellbender.utils.locusiterator.AlignmentStateMachine;
 import org.broadinstitute.hellbender.utils.pileup.PileupElement;
 import org.broadinstitute.hellbender.utils.pileup.ReadPileup;
 import org.broadinstitute.hellbender.utils.read.AlignmentUtils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
+import org.broadinstitute.hellbender.utils.read.ReadCoordinateComparator;
+import org.broadinstitute.hellbender.utils.read.ReadUtils;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 import org.broadinstitute.hellbender.utils.variant.GATKVariantContextUtils;
 import org.broadinstitute.hellbender.utils.variant.HomoSapiensConstants;
@@ -52,14 +55,10 @@ import java.util.Set;
  */
 public class ReferenceConfidenceModel {
 
-    // Annotation used to cache reference confidence information
-    public static final String INDEL_INFORMATIVE_BASES_CACHE_ATTRIBUTE_NAME = "IDL";
-    public static final boolean USE_CACHED_READ_INDEL_INFORMATIVENESS_VALUES = true;
-    // these are filled only when the softclipping is being reversed
+    // Read attributes holding the original soft-clip start and end, set only when soft clipping is reverted
     public static final String ORIGINAL_SOFTCLIP_START_TAG = "os";
     public static final String ORIGINAL_SOFTCLIP_END_TAG = "oe";
 
-    private final SampleList samples;
     private final int indelInformativeDepthIndelSize;
     private final int numRefSamplesForPrior;
     private final byte refModelDeletionQuality;
@@ -84,7 +83,7 @@ public class ReferenceConfidenceModel {
      * Base calls with quality threshold lower than this number won't be considered when assessing the
      * confidence on the hom-ref call.
      */
-    private static final byte BASE_QUAL_THRESHOLD = 6;
+    protected static final byte BASE_QUAL_THRESHOLD = 6;
 
     /**
      * Only base calls with quality strictly greater than this constant,
@@ -151,7 +150,6 @@ public class ReferenceConfidenceModel {
         Utils.validateArg( indelInformativeDepthIndelSize >= 0, () -> "indelInformativeDepthIndelSize must be >= 1 but got " + indelInformativeDepthIndelSize);
 
 
-        this.samples = samples;
         this.indelInformativeDepthIndelSize = indelInformativeDepthIndelSize;
         this.numRefSamplesForPrior = numRefForPrior;
         this.options = new PosteriorProbabilitiesUtils.PosteriorProbabilitiesOptions(HomoSapiensConstants.SNP_HETEROZYGOSITY,
@@ -225,18 +223,16 @@ public class ReferenceConfidenceModel {
         final int ploidy = ploidyModel.samplePloidy(0); // the first sample = the only sample in reference-confidence mode.
 
         final SimpleInterval refSpan = activeRegion.getSpan();
-        final List<ReadPileup> refPileups = AssemblyBasedCallerUtils.getPileupsOverReference(activeRegion.getHeader(), refSpan, readLikelihoods, samples);
         final byte[] ref = refHaplotype.getBases();
+        final List<ReferenceConfidenceResult> siteResults = calculateSiteResults(readLikelihoods, activeRegion, ref, ploidy);
         final List<VariantContext> results = new ArrayList<>(refSpan.size());
         final String sampleName = readLikelihoods.getSample(0);
 
         final int globalRefOffset = refSpan.getStart() - activeRegion.getPaddedSpan().getStart();
-        // Note, we use an indexed for-loop here because this method has a large impact on the profile of HaplotypeCaller runtime in GVCF mode
-        final int refPileupsSize = refPileups.size();
-        for (int i = 0; i < refPileupsSize; i++) {
-            final ReadPileup pileup = refPileups.get(i);
-            final Locatable curPos = pileup.getLocation();
-            final int offset = curPos.getStart() - refSpan.getStart();
+        final int refSpanSize = refSpan.size();
+        for (int i = 0; i < refSpanSize; i++) {
+            final int position = refSpan.getStart() + i;
+            final Locatable curPos = new SimpleInterval(refSpan.getContig(), position, position);
 
             final VariantContext overlappingSite = GATKVariantContextUtils.getOverlappingVariantContext(curPos, variantCalls);
             final List<VariantContext> currentPriors = VCpriors.isEmpty() ? Collections.emptyList() : getMatchingPriors(curPos, overlappingSite, VCpriors);
@@ -249,46 +245,200 @@ public class ReferenceConfidenceModel {
                 }
             } else {
                 // otherwise emit a reference confidence variant context
-                results.add(makeReferenceConfidenceVariantContext(ploidy, ref, sampleName, globalRefOffset, pileup, curPos, offset, applyPriors, currentPriors));
+                results.add(makeReferenceConfidenceVariantContext(ploidy, ref[i + globalRefOffset], sampleName, siteResults.get(i), curPos, applyPriors, currentPriors));
             }
-        }
-
-        // Ensuring that we remove any indel informativeness data we may have attached to the underlying reads for caching purposes
-        // This is important as if multiple reference blocks are computed for a low complexity active region some reads may incorrectly
-        // be using caching values computed for a different reference block.
-        if (USE_CACHED_READ_INDEL_INFORMATIVENESS_VALUES) {
-            readLikelihoods.sampleEvidence(0).forEach(r -> r.clearTransientAttribute(INDEL_INFORMATIVE_BASES_CACHE_ATTRIBUTE_NAME));
-
         }
 
         return results;
     }
 
+    /**
+     * Computes the reference confidence result of every position in the region's active span, in order.
+     *
+     * Reads are visited one at a time in coordinate order, and each read adds its evidence to every span position it
+     * aligns to, so a position accumulates its reads in the order a pileup at that position would list them and the
+     * likelihood sums are the same as a per-position pileup would produce.
+     *
+     * @param readLikelihoods the single-sample read likelihoods holding the reads to use
+     * @param activeRegion the region whose active span is evaluated
+     * @param ref the reference bases of the region's padded span
+     * @param ploidy the sample ploidy
+     * @return one result per position of {@code activeRegion.getSpan()}
+     */
+    protected List<ReferenceConfidenceResult> calculateSiteResults(final AlleleLikelihoods<GATKRead, Haplotype> readLikelihoods,
+                                                                   final AssemblyRegion activeRegion,
+                                                                   final byte[] ref,
+                                                                   final int ploidy) {
+        final SimpleInterval span = activeRegion.getSpan();
+        final int spanStart = span.getStart();
+        final int spanSize = span.size();
+        final int globalRefOffset = spanStart - activeRegion.getPaddedSpan().getStart();
+        final int likelihoodCount = ploidy + 1;
+        final double log10Ploidy = Math.log10(ploidy);
 
-   public VariantContext makeReferenceConfidenceVariantContext(final int ploidy,
-                                                                 final byte[] ref,
-                                                                 final String sampleName,
-                                                                 final int globalRefOffset,
-                                                                 final ReadPileup pileup,
-                                                                 final Locatable curPos,
-                                                                 final int offset,
-                                                                 final boolean applyPriors,
-                                                                 final List<VariantContext> VCpriors) {
+        final RefVsAnyResult[] sites = new RefVsAnyResult[spanSize];
+        for (int i = 0; i < spanSize; i++) {
+            sites[i] = new RefVsAnyResult(likelihoodCount);
+        }
+        final int[] readCounts = new int[spanSize];
+        final int[] indelInformativeReads = new int[spanSize];
+
+        final List<GATKRead> reads = new ArrayList<>(readLikelihoods.sampleEvidence(0));
+        reads.sort(new ReadCoordinateComparator(activeRegion.getHeader()));
+        for (final GATKRead read : reads) {
+            if (read.getEnd() >= spanStart && read.getStart() <= span.getEnd()) {
+                sweepRead(read, spanStart, spanSize, ref, globalRefOffset, likelihoodCount, log10Ploidy, sites, readCounts, indelInformativeReads);
+            }
+        }
+
+        final List<ReferenceConfidenceResult> results = new ArrayList<>(spanSize);
+        for (int i = 0; i < spanSize; i++) {
+            final RefVsAnyResult site = sites[i];
+            final double denominator = readCounts[i] * log10Ploidy;
+            for (int k = 0; k < likelihoodCount; k++) {
+                site.genotypeLikelihoods[k] -= denominator;
+            }
+            applyIndelRefConfidence(ploidy, indelInformativeReads[i], site);
+            results.add(site);
+        }
+        return results;
+    }
+
+    /**
+     * Adds one read's evidence to every span position it aligns to.
+     *
+     * The alignment is walked with the state machine a pileup uses, so the bases, deletions and cigar context seen here
+     * are those a pileup element would carry. Reference skips are not evidence, nor are bases inside the adaptor of a
+     * short fragment. A base contributes to the SNP likelihoods only above the base quality threshold, while every
+     * aligned base that is not part of, or immediately before, an indel contributes to the indel-informative count.
+     */
+    private void sweepRead(final GATKRead read, final int spanStart, final int spanSize, final byte[] ref, final int globalRefOffset,
+                           final int likelihoodCount, final double log10Ploidy,
+                           final RefVsAnyResult[] sites, final int[] readCounts, final int[] indelInformativeReads) {
+        // When soft-clipped bases are not evidence, region finalization reverts every read's soft clips and records
+        // where they were in these tags, so every read reaching here carries them.
+        final boolean skipOriginalSoftClips = !useSoftClippedBases;
+        final int originalSoftStart = skipOriginalSoftClips ? getOriginalSoftStart(read) : 0;
+        final int originalSoftEnd = skipOriginalSoftClips ? getOriginalSoftEnd(read) : 0;
+
+        final AlignmentStateMachine state = new AlignmentStateMachine(read);
+        int cigarElementIndex = -1;
+        // Reference-aligned read offset (insertions collapsed, deletions padded) at which the current cigar element starts.
+        int alignedOffsetOfElement = 0;
+        BitSet indelInformativeBases = null;
+
+        while (state.stepForwardOnGenome() != null) {
+            final int position = state.getGenomePosition();
+            if (position < spanStart) {
+                continue;
+            }
+            final int i = position - spanStart;
+            if (i >= spanSize) {
+                break;
+            }
+            final CigarElement element = state.getCurrentCigarElement();
+            final CigarOperator op = element.getOperator();
+            if (op == CigarOperator.N) {
+                continue;
+            }
+            if (ReadUtils.isBaseInsideAdaptor(read, position)) {
+                continue;
+            }
+            final int elementIndex = state.getCurrentCigarElementOffset();
+            while (cigarElementIndex < elementIndex) {
+                if (cigarElementIndex >= 0) {
+                    alignedOffsetOfElement += alignedLength(read.getCigarElement(cigarElementIndex));
+                }
+                cigarElementIndex++;
+            }
+            final int readOffset = state.getReadOffset();
+            final boolean isDeletion = op == CigarOperator.D;
+            final byte refBase = ref[i + globalRefOffset];
+
+            final byte qual = isDeletion ? deletionQuality(read, readOffset, refBase, true) : read.getBaseQuality(readOffset);
+            final boolean usable = !((qual <= BASE_QUAL_THRESHOLD) && (flowBasedModel || !isDeletion))
+                    && !(skipOriginalSoftClips && (originalSoftStart > position || originalSoftEnd < position));
+            if (usable) {
+                readCounts[i]++;
+                final boolean isAlt = isDeletion || read.getBase(readOffset) != refBase;
+                applyRefVsNonRefLikelihoodAndCount(likelihoodCount, log10Ploidy, sites[i], isAlt, qual, 1.0);
+            }
+
+            // A position's indel-informative count is only used up to MAX_N_INDEL_INFORMATIVE_READS, so a position that
+            // has reached it is skipped. In deep pileups most positions are full before most reads arrive, so most
+            // reads never compute their indel-informative bases; a read that does computes them from the first
+            // position that still counts, and bits from there on do not depend on where the computation starts.
+            if (indelInformativeReads[i] >= MAX_N_INDEL_INFORMATIVE_READS) {
+                continue;
+            }
+            final int offsetInElement = state.getOffsetIntoCurrentCigarElement();
+            final boolean beforeIndel = offsetInElement == element.getLength() - 1
+                    && (nextOnGenomeOperatorIsDeletion(read, elementIndex) || nextOperatorIs(read, elementIndex, CigarOperator.I));
+            if (!isDeletion && !beforeIndel) {
+                final int alignedOffset = alignedOffsetOfElement + (alignedLength(element) > 0 ? offsetInElement : 0);
+                if (indelInformativeBases == null) {
+                    indelInformativeBases = indelInformativeBases(read, alignedOffset, ref, i + globalRefOffset, indelInformativeDepthIndelSize);
+                }
+                if (indelInformativeBases.get(alignedOffset)) {
+                    indelInformativeReads[i]++;
+                }
+            }
+        }
+    }
+
+    // Number of reference-aligned read offsets a cigar element spans: soft clips and reference-consuming operators
+    // count, insertions and hard clips do not.
+    private static int alignedLength(final CigarElement element) {
+        final CigarOperator op = element.getOperator();
+        return op.consumesReferenceBases() || op == CigarOperator.S ? element.getLength() : 0;
+    }
+
+    private static boolean nextOperatorIs(final GATKRead read, final int elementIndex, final CigarOperator op) {
+        return elementIndex + 1 < read.numCigarElements() && read.getCigarElement(elementIndex + 1).getOperator() == op;
+    }
+
+    // Whether the next cigar element that consumes reference bases is a deletion, looking past clips, insertions and pads.
+    private static boolean nextOnGenomeOperatorIsDeletion(final GATKRead read, final int elementIndex) {
+        final int n = read.numCigarElements();
+        for (int k = elementIndex + 1; k < n; k++) {
+            final CigarOperator op = read.getCigarElement(k).getOperator();
+            if (op == CigarOperator.D) {
+                return true;
+            } else if (op == CigarOperator.M || op == CigarOperator.EQ || op == CigarOperator.X) {
+                return false;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Builds the reference-confidence variant context for one position: a hom-ref genotype of the given ploidy over the
+     * reference base and the non-ref symbolic allele, carrying the site's AD, DP, PL and GQ.
+     *
+     * @param ploidy the sample ploidy
+     * @param refBase the reference base at the position
+     * @param sampleName the sample the genotype belongs to
+     * @param homRefCalc the finished reference confidence result for the position
+     * @param curPos the position
+     * @param applyPriors whether to fold the given priors into the genotype's posteriors
+     * @param VCpriors the priors at the position, used only when applyPriors is set
+     * @return the variant context for the position
+     */
+    public VariantContext makeReferenceConfidenceVariantContext(final int ploidy,
+                                                                final byte refBase,
+                                                                final String sampleName,
+                                                                final ReferenceConfidenceResult homRefCalc,
+                                                                final Locatable curPos,
+                                                                final boolean applyPriors,
+                                                                final List<VariantContext> VCpriors) {
         // Assume infinite population on a single sample.
-        final int refOffset = offset + globalRefOffset;
-        final byte refBase = ref[refOffset];
-        final ReferenceConfidenceResult homRefCalc = calcGenotypeLikelihoodsOfRefVsAny(ploidy, pileup, refBase, BASE_QUAL_THRESHOLD, null, true);
-
         final Allele refAllele = Allele.create(refBase, true);
         final List<Allele> refSiteAlleles = Arrays.asList(refAllele, Allele.NON_REF_ALLELE);
         final VariantContextBuilder vcb = new VariantContextBuilder("HC", curPos.getContig(), curPos.getStart(), curPos.getStart(), refSiteAlleles);
         final GenotypeBuilder gb = new GenotypeBuilder(sampleName, GATKVariantContextUtils.homozygousAlleleList(refAllele, ploidy));
         gb.AD(homRefCalc.getAD());
         gb.DP(homRefCalc.getDP());
-
-        doIndelRefConfCalc(ploidy, ref, pileup, refOffset, homRefCalc);
-
-       addGenotypeData(homRefCalc, gb);
+        addGenotypeData(homRefCalc, gb);
         if(!applyPriors) {
             return vcb.genotypes(gb.make()).make();
         }
@@ -298,11 +448,13 @@ public class ReferenceConfidenceModel {
         }
     }
 
-    public void doIndelRefConfCalc(final int ploidy, final byte[] ref, final ReadPileup pileup, final int refOffset, final ReferenceConfidenceResult refResult) {
-        final RefVsAnyResult homRefCalc = (RefVsAnyResult)refResult;
-        // genotype likelihood calculation
+    /**
+     * Combines a site's SNP genotype likelihoods with the indel likelihoods implied by its indel-informative read count
+     * into the site's final PLs.
+     */
+    @VisibleForTesting
+    void applyIndelRefConfidence(final int ploidy, final int nIndelInformativeReads, final RefVsAnyResult homRefCalc) {
         final GenotypeLikelihoods snpGLs = GenotypeLikelihoods.fromLog10Likelihoods(homRefCalc.getGenotypeLikelihoodsCappedByHomRefLikelihood());
-        final int nIndelInformativeReads = calcNReadsWithNoPlausibleIndelsReads(pileup, refOffset, ref, indelInformativeDepthIndelSize);
         final GenotypeLikelihoods indelGLs = getIndelPLs(ploidy,nIndelInformativeReads);
 
         // now that we have the SNP and indel GLs, we take the one with the least confidence,
@@ -471,10 +623,13 @@ public class ReferenceConfidenceModel {
      *
      */
     private byte getDeletionQuality(PileupElement p, byte refBase, final boolean notInIsActive) {
+        return deletionQuality(p.getRead(), p.getOffset(), refBase, notInIsActive);
+    }
+
+    private byte deletionQuality(final GATKRead read, final int offset, final byte refBase, final boolean notInIsActive) {
         if (flowBasedModel && notInIsActive){
-            GATKRead read = p.getRead();
-            if (read.getBase(p.getOffset()+1 ) == refBase){ // if hmer indel - assume that deletion is left aligned
-                return read.getBaseQuality(p.getOffset()+1);
+            if (read.getBase(offset + 1) == refBase){ // if hmer indel - assume that deletion is left aligned
+                return read.getBaseQuality(offset + 1);
             }
         }
         return refModelDeletionQuality;
@@ -486,6 +641,13 @@ public class ReferenceConfidenceModel {
 
     private void applyPileupElementRefVsNonRefLikelihoodAndCount(final byte refBase, final int likelihoodCount, final double log10Ploidy, final RefVsAnyResult result, final PileupElement element, final byte qual, final MathUtils.RunningAverage hqSoftClips, final boolean readsWereRealigned, final double altReadWeight) {
         final boolean isAlt = readsWereRealigned ? isAltAfterAssembly(element, refBase) : isAltBeforeAssembly(element, refBase);
+        applyRefVsNonRefLikelihoodAndCount(likelihoodCount, log10Ploidy, result, isAlt, qual, altReadWeight);
+        if (isAlt && hqSoftClips != null && element.isNextToSoftClip()) {
+            hqSoftClips.add(AlignmentUtils.countHighQualitySoftClips(element.getRead(), HQ_BASE_QUALITY_SOFTCLIP_THRESHOLD));
+        }
+    }
+
+    private static void applyRefVsNonRefLikelihoodAndCount(final int likelihoodCount, final double log10Ploidy, final RefVsAnyResult result, final boolean isAlt, final byte qual, final double altReadWeight) {
         final double referenceLikelihood;
         final double nonRefLikelihood;
         if (isAlt) {
@@ -508,9 +670,6 @@ public class ReferenceConfidenceModel {
                     readWeight * MathUtils.approximateLog10SumLog10(
                             referenceLikelihood + Math.log10(j),
                             nonRefLikelihood + Math.log10(i));
-        }
-        if (isAlt && hqSoftClips != null && element.isNextToSoftClip()) {
-            hqSoftClips.add(AlignmentUtils.countHighQualitySoftClips(element.getRead(), HQ_BASE_QUALITY_SOFTCLIP_THRESHOLD));
         }
     }
 
@@ -586,125 +745,115 @@ public class ReferenceConfidenceModel {
      * base. The method returns true if no indels were found that align as well or better than the rest of this read
      * compared to the reference.
      *
-     * In the computation of this function for a given base, it also computes the value for every readOffset to the
-     * end of the read as well. These results are cached in a bitset in the transient attributes for the read. A 1 in
-     * the bitset means that this method would return true for that particular readOffset/refOffset combination. Note
-     * that if a bitset is found in on the read already, this method defaults to returning the cached value over
-     * computing the plausible indels again.
+     * The result covers every read offset from readStart to the end of the read: bit i of the returned set is true when
+     * the read has no plausible indel at reference-aligned offset i. Bits at offsets before readStart are not meaningful.
+     * The bits at and after readStart do not depend on which offset the computation was anchored at, so one call per
+     * read serves every later position of that read. This holds for base qualities below 128; the mismatch sums that
+     * decide it are over signed bytes.
      *
-     * Positions <= maxIndelSize from the end of the provided read/ref always return false.
-     *
-     * ***WARNING: the caching code makes the assumption that this function will be called over reference bases in ascending order. The
-     *       results are undefined and will likely be wrong if used in any other way. If calling this method out of order, set
-     *       useCachedResults to false
+     * Positions <= maxIndelSize from the end of the provided read/ref are always false.
      *
      * @param read the read
      * @param readStart the 0-based index with respect to @{param}refBases where the read starts (this is the "IGV View" offset for the read)
      * @param refBases the reference bases
      * @param refStart the 0-based offset into refBases that aligns to the readStart position in readBases
      * @param maxIndelSize the max indel size to consider for the read to be informative
-     * @param useCachedResults if false, ignore cached results for informative indel sizes (useful for debugging)
-     * @return true if read can eliminate the possibility that there's an indel of size <= maxIndelSize segregating at refStart
+     * @return the set of reference-aligned read offsets at which the read rules out an indel of size <= maxIndelSize
      */
-    private static boolean readHasNoPlausibleIdealsOfSize(final GATKRead read,
-                                                          final int readStart,
-                                                          final byte[] refBases,
-                                                          final int refStart,
-                                                          final int maxIndelSize,
-                                                          final boolean useCachedResults) {
-        BitSet cachedResult = (BitSet) read.getTransientAttribute(INDEL_INFORMATIVE_BASES_CACHE_ATTRIBUTE_NAME);
-        if (cachedResult == null || !useCachedResults) {
-            Utils.validate(readStart >= 0, "readStart must >= 0");
-            Utils.validate(refStart >= 0, "refStart must >= 0");
-            BitSet informativeBases = new BitSet(read.getLength());
+    @VisibleForTesting
+    static BitSet indelInformativeBases(final GATKRead read,
+                                        final int readStart,
+                                        final byte[] refBases,
+                                        final int refStart,
+                                        final int maxIndelSize) {
+        Utils.validate(readStart >= 0, "readStart must >= 0");
+        Utils.validate(refStart >= 0, "refStart must >= 0");
+        BitSet informativeBases = new BitSet(read.getLength());
 
-            // Check that we aren't so close to the end of the end of the read that we don't have to compute anything more
-            if ( !(read.getLength() - readStart < maxIndelSize) && !(refBases.length - refStart < maxIndelSize) ) {
-                //TODO this should be removed, see https://github.com/broadinstitute/gatk/issues/5646 to track its progress
-                final int secondaryReadBreakPosition = read.getLength() - maxIndelSize;
+        // Check that we aren't so close to the end of the end of the read that we don't have to compute anything more
+        if ( !(read.getLength() - readStart < maxIndelSize) && !(refBases.length - refStart < maxIndelSize) ) {
+            //TODO this should be removed, see https://github.com/broadinstitute/gatk/issues/5646 to track its progress
+            final int secondaryReadBreakPosition = read.getLength() - maxIndelSize;
 
-                // We are safe to use the faster no-copy versions of getBases and getBaseQualities here,
-                // since we're not modifying the returned arrays in any way. This makes a small difference
-                // in the HaplotypeCaller profile, since this method is a major hotspot.
-                final Pair<byte[], byte[]> readBasesAndBaseQualities = AlignmentUtils.getBasesAndBaseQualitiesAlignedOneToOne(read);  //calls getBasesNoCopy if CIGAR is all match
-                final byte[] readBases = readBasesAndBaseQualities.getLeft();
-                final byte[] readQualities = readBasesAndBaseQualities.getRight();
+            // We are safe to use the faster no-copy versions of getBases and getBaseQualities here,
+            // since we're not modifying the returned arrays in any way. This makes a small difference
+            // in the HaplotypeCaller profile, since this method is a major hotspot.
+            final Pair<byte[], byte[]> readBasesAndBaseQualities = AlignmentUtils.getBasesAndBaseQualitiesAlignedOneToOne(read);  //calls getBasesNoCopy if CIGAR is all match
+            final byte[] readBases = readBasesAndBaseQualities.getLeft();
+            final byte[] readQualities = readBasesAndBaseQualities.getRight();
 
-                // Need to check for closeness to the end of the read again as the array size may be different than read.Len() due to deletions in the cigar
-                if (readBases.length - readStart > maxIndelSize) {
+            // Need to check for closeness to the end of the read again as the array size may be different than read.Len() due to deletions in the cigar
+            if (readBases.length - readStart > maxIndelSize) {
 
-                    // Compute where the end of marking would have been given the above two break conditions so we can stop marking there for our cached results
-                    final int lastReadBaseToMarkAsIndelRelevant;
-                    final boolean referenceWasShorter;
-                    if (readBases.length < refBases.length - refStart + readStart + 1) {
-                        // If the read ends first, then we don't mark the last maxIndelSize bases from it as relevant
-                        lastReadBaseToMarkAsIndelRelevant = readBases.length - maxIndelSize;
-                        referenceWasShorter = false;
-                    } else {
-                        // If the reference ends first, then we don't mark the last maxIndelSize bases from it as relevant
-                        lastReadBaseToMarkAsIndelRelevant = refBases.length - refStart + readStart - maxIndelSize + 1;
-                        referenceWasShorter = true;
-                    }
-
-
-                    // Compute the absolute baseline sum against which to test
-                    final int[] baselineMisMatchSums = calculateBaselineMMQualities(readBases, readQualities, readStart, refBases, refStart);
-
-                    // consider each indel size up to max in term, checking if an indel that deletes either the ref bases (deletion)
-                    // or read bases (insertion) would fit as well as the origin baseline sum of mismatching quality scores. These scores
-                    // are computed starting from the last base in the read/reference that would be offset by the indel and compared against
-                    // the mismatch cost for the same base of the reference. Once the sum of mismatch qualities counting from the back for
-                    // one indel size exceeds the global indel mismatch cost, the code stops as it will never find a better mismatch value.
-                    for (int indelSize = 1; indelSize <= maxIndelSize; indelSize++) {
-                        // Computing mismatches corresponding to a deletion
-                        traverseEndOfReadForIndelMismatches(informativeBases,
-                                readStart,
-                                readBases,
-                                readQualities,
-                                lastReadBaseToMarkAsIndelRelevant,
-                                secondaryReadBreakPosition,
-                                refStart,
-                                refBases,
-                                baselineMisMatchSums,
-                                indelSize,
-                                false);
-
-                        // Computing mismatches corresponding to an insertion
-                        traverseEndOfReadForIndelMismatches(informativeBases,
-                                readStart,
-                                readBases,
-                                readQualities,
-                                lastReadBaseToMarkAsIndelRelevant,
-                                secondaryReadBreakPosition,
-                                refStart,
-                                refBases,
-                                baselineMisMatchSums,
-                                indelSize,
-                                true);
-                    }
-
-
-                    // Flip the bases at the front of the read (the ones not within maxIndelSize of the end as those are never informative)
-                    // These must be flipped because thus far we have marked reads for which there were plausible indels with a true value in
-                    // the bitset. This method returns false for cases where we have discovered plausible indels so we must flip them. This
-                    // is done in part to preserve a sensible default behavior for bases not considered by this approach.
-                    if ( lastReadBaseToMarkAsIndelRelevant <= secondaryReadBreakPosition) {
-                        informativeBases.flip(0, lastReadBaseToMarkAsIndelRelevant);
-                        // Resolve the fact that the old approach would always mark the last base examined as being indel uninformative when the reference
-                        // ends first despite it corresponding to a comparison of zero bases against the read
-                        if (referenceWasShorter) {
-                            informativeBases.set(lastReadBaseToMarkAsIndelRelevant - 1, false);
-                        }
-                    } else {
-                        informativeBases.flip(0, secondaryReadBreakPosition + 1);
-                    }
-
+                // Compute where the end of marking would have been given the above two break conditions so we can stop marking there
+                final int lastReadBaseToMarkAsIndelRelevant;
+                final boolean referenceWasShorter;
+                if (readBases.length < refBases.length - refStart + readStart + 1) {
+                    // If the read ends first, then we don't mark the last maxIndelSize bases from it as relevant
+                    lastReadBaseToMarkAsIndelRelevant = readBases.length - maxIndelSize;
+                    referenceWasShorter = false;
+                } else {
+                    // If the reference ends first, then we don't mark the last maxIndelSize bases from it as relevant
+                    lastReadBaseToMarkAsIndelRelevant = refBases.length - refStart + readStart - maxIndelSize + 1;
+                    referenceWasShorter = true;
                 }
+
+
+                // Compute the absolute baseline sum against which to test
+                final int[] baselineMisMatchSums = calculateBaselineMMQualities(readBases, readQualities, readStart, refBases, refStart);
+
+                // consider each indel size up to max in term, checking if an indel that deletes either the ref bases (deletion)
+                // or read bases (insertion) would fit as well as the origin baseline sum of mismatching quality scores. These scores
+                // are computed starting from the last base in the read/reference that would be offset by the indel and compared against
+                // the mismatch cost for the same base of the reference. Once the sum of mismatch qualities counting from the back for
+                // one indel size exceeds the global indel mismatch cost, the code stops as it will never find a better mismatch value.
+                for (int indelSize = 1; indelSize <= maxIndelSize; indelSize++) {
+                    // Computing mismatches corresponding to a deletion
+                    traverseEndOfReadForIndelMismatches(informativeBases,
+                            readStart,
+                            readBases,
+                            readQualities,
+                            lastReadBaseToMarkAsIndelRelevant,
+                            secondaryReadBreakPosition,
+                            refStart,
+                            refBases,
+                            baselineMisMatchSums,
+                            indelSize,
+                            false);
+
+                    // Computing mismatches corresponding to an insertion
+                    traverseEndOfReadForIndelMismatches(informativeBases,
+                            readStart,
+                            readBases,
+                            readQualities,
+                            lastReadBaseToMarkAsIndelRelevant,
+                            secondaryReadBreakPosition,
+                            refStart,
+                            refBases,
+                            baselineMisMatchSums,
+                            indelSize,
+                            true);
+                }
+
+
+                // Flip the bases at the front of the read (the ones not within maxIndelSize of the end as those are never informative)
+                // These must be flipped because thus far we have marked reads for which there were plausible indels with a true value in
+                // the bitset. This method returns false for cases where we have discovered plausible indels so we must flip them. This
+                // is done in part to preserve a sensible default behavior for bases not considered by this approach.
+                if ( lastReadBaseToMarkAsIndelRelevant <= secondaryReadBreakPosition) {
+                    informativeBases.flip(0, lastReadBaseToMarkAsIndelRelevant);
+                    // Resolve the fact that the old approach would always mark the last base examined as being indel uninformative when the reference
+                    // ends first despite it corresponding to a comparison of zero bases against the read
+                    if (referenceWasShorter) {
+                        informativeBases.set(lastReadBaseToMarkAsIndelRelevant - 1, false);
+                    }
+                } else {
+                    informativeBases.flip(0, secondaryReadBreakPosition + 1);
+                }
+
             }
-            cachedResult = informativeBases;
-            read.setTransientAttribute(INDEL_INFORMATIVE_BASES_CACHE_ATTRIBUTE_NAME, informativeBases);
         }
-        return cachedResult.get(readStart);
+        return informativeBases;
     }
 
     /**
@@ -720,7 +869,7 @@ public class ReferenceConfidenceModel {
      *
      * It is expected that only the bases between readStart and lastReadBaseToMarkAsIndelRelevant in the bitset will be set to true
      * by this method if they are ambiguous about an indel of the given size. We then flip these values later in the process because
-     * an ambiguous indel positions in the read actually return false in readHasNoPlausibleIdealsOfSize.
+     * an ambiguous indel positions in the read actually return false in indelInformativeBases.
      *
      * NOTE: This method examines overhanging bases to the reference/read if they do not end at the same position.
      *       (eg. if the reference ends 20 bases after the read does and you are looking at a deletion of size 5, the first
@@ -785,56 +934,6 @@ public class ReferenceConfidenceModel {
     // Are these two bases different (including IUPAC bases) and does the read not correspond to a deletion on the reference
     private static boolean isMismatchAndNotAnAlignmentGap(byte readBase, byte refBase) {
         return !Nucleotide.intersect(readBase, refBase) && (readBase != AlignmentUtils.GAP_CHARACTER);
-    }
-
-    /**
-     * Calculate the number of reads that have no plausible indels based on alignment at pileup
-     *
-     * @param pileup a pileup
-     * @param pileupOffsetIntoRef index along the reference corresponding to the pileup
-     * @param ref the ref bases
-     * @param maxIndelSize maximum indel size to consider in the as plausible calculation
-     * @return an integer >= 0
-     */
-    @VisibleForTesting
-    int calcNReadsWithNoPlausibleIndelsReads(final ReadPileup pileup, final int pileupOffsetIntoRef, final byte[] ref, final int maxIndelSize) {
-        int nInformative = 0;
-        for ( final PileupElement p : pileup ) {
-            // doesn't count as evidence
-            if ( p.isBeforeDeletionStart() || p.isBeforeInsertion() || p.isDeletion() ) {
-                continue;
-            }
-
-            final int offset = getCigarModifiedOffset(p);
-
-            if ( readHasNoPlausibleIdealsOfSize(p.getRead(), offset, ref, pileupOffsetIntoRef, maxIndelSize, USE_CACHED_READ_INDEL_INFORMATIVENESS_VALUES) ) {
-                nInformative++;
-                if( nInformative > MAX_N_INDEL_INFORMATIVE_READS ) {
-                    return MAX_N_INDEL_INFORMATIVE_READS;
-                }
-            }
-        }
-        return nInformative;
-    }
-
-    /**
-     * Calculate the index of the current pileup position against the reference-aligned read
-     * This offset should be representative of the "IGV view" for the read where insertions are collapsed and deletions
-     * are padded so that we can easily count the mismatches against the reference
-     * @param p the PileupElement containing the offset as an index into the read base sequence
-     * @return the new reference-aligned index/offset
-     */
-    @VisibleForTesting
-    protected int getCigarModifiedOffset (final PileupElement p){
-        final GATKRead read = p.getRead();
-        int offset = (p.getCurrentCigarElement().getOperator().consumesReferenceBases() || p.getCurrentCigarElement().getOperator() == CigarOperator.S)? p.getOffsetInCurrentCigar() : 0;
-        for (int i = 0; i < p.getCurrentCigarOffset(); i++) {
-            final CigarElement elem = read.getCigarElement(i);
-            if (elem.getOperator().consumesReferenceBases() || elem.getOperator() == CigarOperator.S) {
-                offset += elem.getLength();
-            }
-        }
-        return offset;
     }
 
     /**

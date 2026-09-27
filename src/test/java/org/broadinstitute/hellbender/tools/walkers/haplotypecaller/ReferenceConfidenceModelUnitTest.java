@@ -325,24 +325,31 @@ public final class ReferenceConfidenceModelUnitTest extends GATKBaseTest {
     }
 
     @Test(dataProvider = "CalcNIndelInformativeReadsData")
-    public void testCalcNIndelInformativeReads(final String readBases, final String cigar, final byte[] readQuals, final String ref, final int maxIndelSize, final int readStartIntoRef, final List<Integer> expected ) {
+    public void testIndelInformativeBases(final String readBases, final String cigar, final byte[] readQuals, final String ref, final int maxIndelSize, final int readStartIntoRef, final List<Integer> expected ) {
         final byte qual = (byte)30;
         final byte[] quals = readQuals != null ? readQuals : Utils.dupBytes(qual, readBases.length());
-        // on the same read after the first site the result will be cached in the transient attributes, assert the results are the same as those calculated non-transiently.
-        final GATKRead readCache = ArtificialReadUtils.createArtificialRead(readBases.getBytes(), quals, cigar);
+        final GATKRead read = ArtificialReadUtils.createArtificialRead(readBases.getBytes(), quals, cigar);
+        // the bitset computed at the read's first informative base must serve every later base of the read
+        BitSet anchoredAtFirstBase = null;
 
         for ( int i = 0; i < readBases.getBytes().length; i++ ) {
-            final Pair<Integer, CigarOperator> readCoordinateForReferenceCoordinate = ReadUtils.getReadIndexForReferenceCoordinate(readCache, readCache.getStart() + i);
+            final Pair<Integer, CigarOperator> readCoordinateForReferenceCoordinate = ReadUtils.getReadIndexForReferenceCoordinate(read, read.getStart() + i);
 
             if (readCoordinateForReferenceCoordinate.getRight() != null && readCoordinateForReferenceCoordinate.getRight().consumesReadBases()) {
-                final GATKRead readNoCache = ArtificialReadUtils.createArtificialRead(readBases.getBytes(), quals, cigar);
-                final SimpleInterval loc = new SimpleInterval("20", i + 1 + readStartIntoRef, i + 1 + readStartIntoRef);
-                final ReadPileup pileupCache = new ReadPileup(loc, Collections.singletonList(readCache), readCoordinateForReferenceCoordinate.getLeft());
-                final ReadPileup pileupNoCache = new ReadPileup(loc, Collections.singletonList(readNoCache), ReadUtils.getReadIndexForReferenceCoordinate(readNoCache, readNoCache.getStart() + i).getKey());
-                final int actualCache = model.calcNReadsWithNoPlausibleIndelsReads(pileupCache, i + readStartIntoRef, ref.getBytes(), maxIndelSize);
-                final int actualNoCache = model.calcNReadsWithNoPlausibleIndelsReads(pileupNoCache, i + readStartIntoRef, ref.getBytes(), maxIndelSize);
-                Assert.assertEquals(actualCache, (int)expected.get(i), "cached result failed at position " + i);
-                Assert.assertEquals(actualNoCache, (int)expected.get(i), "non-cached result failed at position " + i);
+                final PileupElement element = PileupElement.createPileupForReadAndOffset(read, readCoordinateForReferenceCoordinate.getLeft());
+                final boolean skipped = element.isBeforeDeletionStart() || element.isBeforeInsertion() || element.isDeletion();
+                final int alignedOffset = ReferenceConfidenceTestUtils.referenceAlignedOffset(element);
+                final int refOffset = i + readStartIntoRef;
+                final BitSet anchoredHere = ReferenceConfidenceModel.indelInformativeBases(read, alignedOffset, ref.getBytes(), refOffset, maxIndelSize);
+                if (!skipped && anchoredAtFirstBase == null) {
+                    anchoredAtFirstBase = anchoredHere;
+                }
+                final int actualAnchoredHere = !skipped && anchoredHere.get(alignedOffset) ? 1 : 0;
+                Assert.assertEquals(actualAnchoredHere, (int)expected.get(i), "result anchored at position " + i + " failed");
+                if (!skipped) {
+                    final int actualAnchoredAtFirstBase = anchoredAtFirstBase.get(alignedOffset) ? 1 : 0;
+                    Assert.assertEquals(actualAnchoredAtFirstBase, (int)expected.get(i), "result anchored at the first base failed at position " + i);
+                }
             }
         }
     }
@@ -436,7 +443,7 @@ public final class ReferenceConfidenceModelUnitTest extends GATKBaseTest {
 
         final GATKRead read = ArtificialReadUtils.createArtificialRead(readBases.getBytes(), quals, cigar);
         final PileupElement pe = PileupElement.createPileupForReadAndOffset(read, pileupOffset);
-        final int newOffset = model.getCigarModifiedOffset(pe);
+        final int newOffset = ReferenceConfidenceTestUtils.referenceAlignedOffset(pe);
         Assert.assertEquals(newOffset, expectedNewOffset);
     }
 
@@ -551,10 +558,6 @@ public final class ReferenceConfidenceModelUnitTest extends GATKBaseTest {
         final GenotypingModel genotypingModel = new IndependentSampleGenotypesModel();
         final List<Integer> expectedDPs = Collections.nCopies(data.getActiveRegion().getSpan().size(), nReads);
         final List<VariantContext> contexts = model.calculateRefConfidence(data.getRefHap(), haplotypes, data.getPaddedRefLoc(), data.getActiveRegion(), likelihoods, ploidyModel, calls, false, Collections.emptyList());
-        // Asserting that none of the reads after calculateRefConfidence have indel informativeness caching values attached.
-        for (GATKRead read : data.getActiveRegion().getReads()) {
-            Assert.assertNull(read.getTransientAttribute(ReferenceConfidenceModel.INDEL_INFORMATIVE_BASES_CACHE_ATTRIBUTE_NAME));
-        }
         checkReferenceModelResult(data, contexts, expectedDPs, calls);
     }
 
@@ -576,10 +579,6 @@ public final class ReferenceConfidenceModelUnitTest extends GATKBaseTest {
                 final List<Integer> expectedDPs = new ArrayList<>(Collections.nCopies(data.getActiveRegion().getSpan().size(), 0));
                 for ( int i = start; i < readLen + start; i++ ) expectedDPs.set(i, 1);
                 final List<VariantContext> contexts = model.calculateRefConfidence(data.getRefHap(), haplotypes, data.getPaddedRefLoc(), data.getActiveRegion(), likelihoods, ploidyModel, calls);
-                // Asserting that none of the reads after calculateRefConfidence have indel informativeness caching values attached.
-                for (GATKRead read : data.getActiveRegion().getReads()) {
-                    Assert.assertNull(read.getTransientAttribute(ReferenceConfidenceModel.INDEL_INFORMATIVE_BASES_CACHE_ATTRIBUTE_NAME));
-                }
                 checkReferenceModelResult(data, contexts, expectedDPs, calls);
             }
         }
@@ -616,10 +615,6 @@ public final class ReferenceConfidenceModelUnitTest extends GATKBaseTest {
 
                     final List<Integer> expectedDPs = Collections.nCopies(data.getActiveRegion().getSpan().size(), nReads);
                     final List<VariantContext> contexts = model.calculateRefConfidence(data.getRefHap(), haplotypes, data.getPaddedRefLoc(), data.getActiveRegion(), likelihoods, ploidyModel, calls);
-                    // Asserting that none of the reads after calculateRefConfidence have indel informativeness caching values attached.
-                    for (GATKRead read : data.getActiveRegion().getReads()) {
-                        Assert.assertNull(read.getTransientAttribute(ReferenceConfidenceModel.INDEL_INFORMATIVE_BASES_CACHE_ATTRIBUTE_NAME));
-                    }
                     checkReferenceModelResult(data, contexts, expectedDPs, calls);
                 }
             }
