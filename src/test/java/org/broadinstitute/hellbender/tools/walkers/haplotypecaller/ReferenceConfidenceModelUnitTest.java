@@ -16,6 +16,8 @@ import org.broadinstitute.hellbender.tools.walkers.genotyper.IndependentSampleGe
 import org.broadinstitute.hellbender.tools.walkers.genotyper.PloidyModel;
 import org.broadinstitute.hellbender.utils.GenomeLoc;
 import org.broadinstitute.hellbender.utils.GenomeLocParser;
+import org.broadinstitute.hellbender.utils.MathUtils;
+import org.broadinstitute.hellbender.utils.QualityUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.clipping.ReadClipper;
@@ -352,6 +354,115 @@ public final class ReferenceConfidenceModelUnitTest extends GATKBaseTest {
                 }
             }
         }
+    }
+
+    private static double[] directIncrements(final int ploidy, final boolean isAlt, final byte qual) {
+        final int likelihoodCount = ploidy + 1;
+        final double log10Ploidy = Math.log10(ploidy);
+        final double referenceLikelihood = isAlt ? QualityUtils.qualToErrorProbLog10(qual) + MathUtils.LOG10_ONE_THIRD : QualityUtils.qualToProbLog10(qual);
+        final double nonRefLikelihood = isAlt ? QualityUtils.qualToProbLog10(qual) : QualityUtils.qualToErrorProbLog10(qual) + MathUtils.LOG10_ONE_THIRD;
+        final double[] increments = new double[likelihoodCount];
+        increments[0] = referenceLikelihood + log10Ploidy;
+        increments[likelihoodCount - 1] = nonRefLikelihood + log10Ploidy;
+        for (int i = 1, j = likelihoodCount - 2; i < likelihoodCount - 1; i++, j--) {
+            increments[i] = MathUtils.approximateLog10SumLog10(referenceLikelihood + Math.log10(j), nonRefLikelihood + Math.log10(i));
+        }
+        return increments;
+    }
+
+    private static void assertBitIdentical(final double[] actual, final double[] expected, final String label) {
+        Assert.assertEquals(actual.length, expected.length, label);
+        for (int k = 0; k < actual.length; k++) {
+            Assert.assertEquals(Double.doubleToLongBits(actual[k]), Double.doubleToLongBits(expected[k]), label + " likelihood " + k + ": " + actual[k] + " vs " + expected[k]);
+        }
+    }
+
+    @Test
+    public void refVsAnyLikelihoodsEqualTheDirectPerElementAccumulation() {
+        final Random rng = new Random(11);
+        for (final int ploidy : Arrays.asList(1, 2, 3, 4)) {
+            for (int trial = 0; trial < 50; trial++) {
+                final int depth = 1 + rng.nextInt(40);
+                final List<GATKRead> reads = new ArrayList<>();
+                final byte[] quals = new byte[depth];
+                final byte[] bases = new byte[depth];
+                for (int i = 0; i < depth; i++) {
+                    quals[i] = (byte) rng.nextInt(60);
+                    bases[i] = (byte) (rng.nextInt(3) == 0 ? 'C' : 'A');
+                    final GATKRead read = ArtificialReadUtils.createArtificialRead(header, "read" + i, 0, 100, new byte[]{bases[i]}, new byte[]{quals[i]}, "1M");
+                    read.setReadGroup(rg.getId());
+                    reads.add(read);
+                }
+                final ReadPileup pileup = new ReadPileup(new SimpleInterval("1", 100, 100), reads, 0);
+                final RefVsAnyResult actual = (RefVsAnyResult) model.calcGenotypeLikelihoodsOfRefVsAny(ploidy, pileup, (byte) 'A', (byte) 6, null, true);
+
+                final double[] expected = new double[ploidy + 1];
+                int counted = 0;
+                for (int i = 0; i < depth; i++) {
+                    if (quals[i] <= 6) {
+                        continue;
+                    }
+                    counted++;
+                    final double[] increments = directIncrements(ploidy, bases[i] != 'A', quals[i]);
+                    for (int k = 0; k <= ploidy; k++) {
+                        expected[k] += increments[k];
+                    }
+                }
+                for (int k = 0; k <= ploidy; k++) {
+                    expected[k] -= counted * Math.log10(ploidy);
+                }
+                assertBitIdentical(actual.genotypeLikelihoods, expected, "ploidy " + ploidy + " trial " + trial);
+            }
+        }
+    }
+
+    @Test
+    public void likelihoodIncrementTableEqualsTheDirectExpressionsForEveryQuality() {
+        for (final int ploidy : Arrays.asList(1, 2, 3, 4)) {
+            final double[][][] table = ReferenceConfidenceModel.likelihoodIncrements(ploidy);
+            for (int alt = 0; alt < 2; alt++) {
+                Assert.assertEquals(table[alt].length, QualityUtils.MAX_QUAL + 1);
+                for (int qual = 0; qual <= QualityUtils.MAX_QUAL; qual++) {
+                    assertBitIdentical(table[alt][qual], directIncrements(ploidy, alt == 1, (byte) qual), "ploidy " + ploidy + " alt " + alt + " qual " + qual);
+                }
+            }
+        }
+    }
+
+    @Test
+    public void deletionQualityAbove127IsLookedUpAsAnUnsignedQuality() {
+        final byte deletionQuality = (byte) 200;
+        final ReferenceConfidenceModel highDeletionQualityModel = new ReferenceConfidenceModel(samples, header, 10, -1, deletionQuality, true, false);
+        final GATKRead read = ArtificialReadUtils.createArtificialRead(header, "del", 0, 100, "AAAAAAAAAA".getBytes(), Utils.dupBytes((byte) 30, 10), "5M3D5M");
+        read.setReadGroup(rg.getId());
+        final PileupElement deletion = new PileupElement(read, 4, read.getCigarElement(1), 1, 0);
+        final ReadPileup pileup = new ReadPileup(new SimpleInterval("1", 105, 105), Collections.singletonList(deletion));
+        final RefVsAnyResult actual = (RefVsAnyResult) highDeletionQualityModel.calcGenotypeLikelihoodsOfRefVsAny(2, pileup, (byte) 'A', (byte) 6, null, true);
+        final double[] expected = directIncrements(2, true, deletionQuality);
+        for (int k = 0; k < expected.length; k++) {
+            expected[k] -= Math.log10(2);
+        }
+        assertBitIdentical(actual.genotypeLikelihoods, expected, "deletion quality 200");
+    }
+
+    @Test
+    public void altReadWeightScalesOnlyTheAltElements() {
+        final List<GATKRead> reads = new ArrayList<>();
+        for (int i = 0; i < 4; i++) {
+            final GATKRead read = ArtificialReadUtils.createArtificialRead(header, "read" + i, 0, 100, new byte[]{(byte) (i < 2 ? 'A' : 'C')}, new byte[]{30}, "1M");
+            read.setReadGroup(rg.getId());
+            reads.add(read);
+        }
+        final ReadPileup pileup = new ReadPileup(new SimpleInterval("1", 100, 100), reads, 0);
+        final double weight = 0.25;
+        final RefVsAnyResult actual = (RefVsAnyResult) model.calcGenotypeLikelihoodsOfRefVsAny(2, pileup, (byte) 'A', (byte) 6, null, false, weight);
+        final double[] refIncrements = directIncrements(2, false, (byte) 30);
+        final double[] altIncrements = directIncrements(2, true, (byte) 30);
+        final double[] expected = new double[3];
+        for (int k = 0; k < 3; k++) {
+            expected[k] = refIncrements[k] + refIncrements[k] + weight * altIncrements[k] + weight * altIncrements[k] - 4 * Math.log10(2);
+        }
+        assertBitIdentical(actual.genotypeLikelihoods, expected, "weighted");
     }
 
     @Test

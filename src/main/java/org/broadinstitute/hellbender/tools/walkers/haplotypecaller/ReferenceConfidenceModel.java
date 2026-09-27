@@ -45,6 +45,7 @@ import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Code for estimating the reference confidence
@@ -117,6 +118,50 @@ public class ReferenceConfidenceModel {
      */
     private static final double INDEL_LIKELIHOOD = QualityUtils.qualToErrorProbLog10(INDEL_QUAL);
     private static final int IDX_HOM_REF = 0;
+
+    /**
+     * Per-element genotype likelihood increments by ploidy: entry [ploidy][alt ? 1 : 0][qual & 0xff] holds, in
+     * genotype order, the amounts a pileup element of that base quality adds to the likelihoods at read weight 1,
+     * for every quality the quality tables define (up to {@link QualityUtils#MAX_QUAL}).
+     * Each element's increments depend only on whether it is alt and on its quality, so they are computed once per
+     * ploidy with the same expressions an element would evaluate, and adding them in element order gives the same
+     * doubles.
+     */
+    private static final ConcurrentHashMap<Integer, double[][][]> LIKELIHOOD_INCREMENTS_BY_PLOIDY = new ConcurrentHashMap<>();
+
+    @VisibleForTesting
+    static double[][][] likelihoodIncrements(final int ploidy) {
+        return LIKELIHOOD_INCREMENTS_BY_PLOIDY.computeIfAbsent(ploidy, ReferenceConfidenceModel::computeLikelihoodIncrements);
+    }
+
+    private static double[][][] computeLikelihoodIncrements(final int ploidy) {
+        final int likelihoodCount = ploidy + 1;
+        final double log10Ploidy = Math.log10(ploidy);
+        final double[][][] increments = new double[2][QualityUtils.MAX_QUAL + 1][likelihoodCount];
+        for (int alt = 0; alt < 2; alt++) {
+            for (int qualIndex = 0; qualIndex <= QualityUtils.MAX_QUAL; qualIndex++) {
+                final byte qual = (byte) qualIndex;
+                final double referenceLikelihood;
+                final double nonRefLikelihood;
+                if (alt == 1) {
+                    nonRefLikelihood = QualityUtils.qualToProbLog10(qual);
+                    referenceLikelihood = QualityUtils.qualToErrorProbLog10(qual) + MathUtils.LOG10_ONE_THIRD;
+                } else {
+                    referenceLikelihood = QualityUtils.qualToProbLog10(qual);
+                    nonRefLikelihood = QualityUtils.qualToErrorProbLog10(qual) + MathUtils.LOG10_ONE_THIRD;
+                }
+                final double[] entry = increments[alt][qualIndex];
+                // Homozygous likelihoods don't need the logSum trick.
+                entry[0] = referenceLikelihood + log10Ploidy;
+                entry[likelihoodCount - 1] = nonRefLikelihood + log10Ploidy;
+                // Heterozygous likelihoods need the logSum trick:
+                for (int i = 1, j = likelihoodCount - 2; i < likelihoodCount - 1; i++, j--) {
+                    entry[i] = MathUtils.approximateLog10SumLog10(referenceLikelihood + Math.log10(j), nonRefLikelihood + Math.log10(i));
+                }
+            }
+        }
+        return increments;
+    }
 
     /**
      * Options related to posterior probability calcs
@@ -275,6 +320,7 @@ public class ReferenceConfidenceModel {
         final int globalRefOffset = spanStart - activeRegion.getPaddedSpan().getStart();
         final int likelihoodCount = ploidy + 1;
         final double log10Ploidy = Math.log10(ploidy);
+        final double[][][] increments = likelihoodIncrements(ploidy);
 
         final RefVsAnyResult[] sites = new RefVsAnyResult[spanSize];
         for (int i = 0; i < spanSize; i++) {
@@ -287,7 +333,7 @@ public class ReferenceConfidenceModel {
         reads.sort(new ReadCoordinateComparator(activeRegion.getHeader()));
         for (final GATKRead read : reads) {
             if (read.getEnd() >= spanStart && read.getStart() <= span.getEnd()) {
-                sweepRead(read, spanStart, spanSize, ref, globalRefOffset, likelihoodCount, log10Ploidy, sites, readCounts, indelInformativeReads);
+                sweepRead(read, spanStart, spanSize, ref, globalRefOffset, increments, sites, readCounts, indelInformativeReads);
             }
         }
 
@@ -313,7 +359,7 @@ public class ReferenceConfidenceModel {
      * aligned base that is not part of, or immediately before, an indel contributes to the indel-informative count.
      */
     private void sweepRead(final GATKRead read, final int spanStart, final int spanSize, final byte[] ref, final int globalRefOffset,
-                           final int likelihoodCount, final double log10Ploidy,
+                           final double[][][] increments,
                            final RefVsAnyResult[] sites, final int[] readCounts, final int[] indelInformativeReads) {
         // When soft-clipped bases are not evidence, region finalization reverts every read's soft clips and records
         // where they were in these tags, so every read reaching here carries them.
@@ -361,7 +407,7 @@ public class ReferenceConfidenceModel {
             if (usable) {
                 readCounts[i]++;
                 final boolean isAlt = isDeletion || read.getBase(readOffset) != refBase;
-                applyRefVsNonRefLikelihoodAndCount(likelihoodCount, log10Ploidy, sites[i], isAlt, qual, 1.0);
+                applyRefVsNonRefLikelihoodAndCount(increments, sites[i], isAlt, qual, 1.0);
             }
 
             // A position's indel-informative count is only used up to MAX_N_INDEL_INFORMATIVE_READS, so a position that
@@ -558,6 +604,7 @@ public class ReferenceConfidenceModel {
 
         final int likelihoodCount = ploidy + 1;
         final double log10Ploidy = Math.log10(ploidy);
+        final double[][][] increments = likelihoodIncrements(ploidy);
 
         final RefVsAnyResult result = new RefVsAnyResult(likelihoodCount);
         int readCount = 0;
@@ -579,7 +626,7 @@ public class ReferenceConfidenceModel {
             }
 
             readCount++;
-            applyPileupElementRefVsNonRefLikelihoodAndCount(refBase, likelihoodCount, log10Ploidy, result, p, qual, hqSoftClips, readsWereRealigned, altReadWeight);
+            applyPileupElementRefVsNonRefLikelihoodAndCount(refBase, increments, result, p, qual, hqSoftClips, readsWereRealigned, altReadWeight);
         }
         final double denominator = readCount * log10Ploidy;
         for (int i = 0; i < likelihoodCount; i++) {
@@ -635,41 +682,25 @@ public class ReferenceConfidenceModel {
         return refModelDeletionQuality;
     }
 
-    private void applyPileupElementRefVsNonRefLikelihoodAndCount(final byte refBase, final int likelihoodCount, final double log10Ploidy, final RefVsAnyResult result, final PileupElement element, final byte qual, final MathUtils.RunningAverage hqSoftClips, final boolean readsWereRealigned) {
-        applyPileupElementRefVsNonRefLikelihoodAndCount(refBase, likelihoodCount, log10Ploidy, result, element, qual, hqSoftClips, readsWereRealigned, 1.0);
-    }
-
-    private void applyPileupElementRefVsNonRefLikelihoodAndCount(final byte refBase, final int likelihoodCount, final double log10Ploidy, final RefVsAnyResult result, final PileupElement element, final byte qual, final MathUtils.RunningAverage hqSoftClips, final boolean readsWereRealigned, final double altReadWeight) {
+    private void applyPileupElementRefVsNonRefLikelihoodAndCount(final byte refBase, final double[][][] increments, final RefVsAnyResult result, final PileupElement element, final byte qual, final MathUtils.RunningAverage hqSoftClips, final boolean readsWereRealigned, final double altReadWeight) {
         final boolean isAlt = readsWereRealigned ? isAltAfterAssembly(element, refBase) : isAltBeforeAssembly(element, refBase);
-        applyRefVsNonRefLikelihoodAndCount(likelihoodCount, log10Ploidy, result, isAlt, qual, altReadWeight);
+        applyRefVsNonRefLikelihoodAndCount(increments, result, isAlt, qual, altReadWeight);
         if (isAlt && hqSoftClips != null && element.isNextToSoftClip()) {
             hqSoftClips.add(AlignmentUtils.countHighQualitySoftClips(element.getRead(), HQ_BASE_QUALITY_SOFTCLIP_THRESHOLD));
         }
     }
 
-    private static void applyRefVsNonRefLikelihoodAndCount(final int likelihoodCount, final double log10Ploidy, final RefVsAnyResult result, final boolean isAlt, final byte qual, final double altReadWeight) {
-        final double referenceLikelihood;
-        final double nonRefLikelihood;
+    private static void applyRefVsNonRefLikelihoodAndCount(final double[][][] increments, final RefVsAnyResult result, final boolean isAlt, final byte qual, final double altReadWeight) {
         if (isAlt) {
-            nonRefLikelihood = QualityUtils.qualToProbLog10(qual);
-            referenceLikelihood = QualityUtils.qualToErrorProbLog10(qual) + MathUtils.LOG10_ONE_THIRD;
             result.nonRefDepth++;
         } else {
-            referenceLikelihood = QualityUtils.qualToProbLog10(qual);
-            nonRefLikelihood = QualityUtils.qualToErrorProbLog10(qual) + MathUtils.LOG10_ONE_THIRD;
             result.refDepth++;
         }
-
         final double readWeight = isAlt ? altReadWeight : 1.0;
-        // Homozygous likelihoods don't need the logSum trick.
-        result.genotypeLikelihoods[0] += readWeight * (referenceLikelihood + log10Ploidy);
-        result.genotypeLikelihoods[likelihoodCount - 1] += readWeight * (nonRefLikelihood + log10Ploidy);
-        // Heterozygous likelihoods need the logSum trick:
-        for (int i = 1, j = likelihoodCount - 2; i < likelihoodCount - 1; i++, j--) {
-            result.genotypeLikelihoods[i] +=
-                    readWeight * MathUtils.approximateLog10SumLog10(
-                            referenceLikelihood + Math.log10(j),
-                            nonRefLikelihood + Math.log10(i));
+        final double[] entry = increments[isAlt ? 1 : 0][qual & 0xff];
+        final double[] genotypeLikelihoods = result.genotypeLikelihoods;
+        for (int k = 0; k < entry.length; k++) {
+            genotypeLikelihoods[k] += readWeight * entry[k];
         }
     }
 
