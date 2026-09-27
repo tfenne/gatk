@@ -692,4 +692,95 @@ public final class LocusIteratorByStateUnitTest extends LocusIteratorByStateBase
         final int nExpectedPileups = nReadContainingPileups;
         Assert.assertEquals(nPileups, nExpectedPileups, "\"Wrong number of pileups seen for " + read + " with " + nClipsOnLeft + " clipped bases.");
     }
+
+    private static Set<String> readNames(final ReadPileup pileup) {
+        final Set<String> names = new HashSet<>();
+        for (final PileupElement element : pileup) {
+            names.add(element.getRead().getName());
+        }
+        return names;
+    }
+
+    @Test
+    public void lociWithoutNewReadsKeepTheReadsThatSpanThem() {
+        final int readLength = 10;
+        final List<GATKRead> reads = Arrays.asList(
+                ArtificialReadUtils.createArtificialRead(header, "a", 0, 100, readLength),
+                ArtificialReadUtils.createArtificialRead(header, "b", 0, 100, readLength),
+                ArtificialReadUtils.createArtificialRead(header, "c", 0, 105, readLength));
+        final LocusIteratorByState li = makeLIBS(reads, DownsamplingMethod.NONE, header);
+        int expectedPosition = 100;
+        while (li.hasNext()) {
+            final AlignmentContext context = li.next();
+            Assert.assertEquals(context.getLocation().getStart(), expectedPosition);
+            final Set<String> expected = new HashSet<>();
+            if (expectedPosition < 110) { expected.add("a"); expected.add("b"); }
+            if (expectedPosition >= 105) { expected.add("c"); }
+            Assert.assertEquals(readNames(context.getBasePileup()), expected, "position " + expectedPosition);
+            expectedPosition++;
+        }
+        Assert.assertEquals(expectedPosition, 115);
+    }
+
+    @Test
+    public void lociWithoutNewReadsKeepTheReadsThatSpanThemWhenDownsampling() {
+        final int readLength = 10;
+        final List<GATKRead> reads = Arrays.asList(
+                ArtificialReadUtils.createArtificialRead(header, "a", 0, 100, readLength),
+                ArtificialReadUtils.createArtificialRead(header, "b", 0, 100, readLength),
+                ArtificialReadUtils.createArtificialRead(header, "c", 0, 105, readLength),
+                ArtificialReadUtils.createArtificialRead(header, "d", 0, 112, readLength));
+        final LocusIteratorByState li = new LocusIteratorByState(
+                new FakeCloseableIterator<>(reads.iterator()),
+                new LIBSDownsamplingInfo(true, 10),
+                sampleListForSAMWithoutReadGroups(),
+                header,
+                true);
+        int expectedPosition = 100;
+        while (li.hasNext()) {
+            final AlignmentContext context = li.next();
+            Assert.assertEquals(context.getLocation().getStart(), expectedPosition);
+            final Set<String> expected = new HashSet<>();
+            if (expectedPosition < 110) { expected.add("a"); expected.add("b"); }
+            if (expectedPosition >= 105 && expectedPosition < 115) { expected.add("c"); }
+            if (expectedPosition >= 112) { expected.add("d"); }
+            Assert.assertEquals(readNames(context.getBasePileup()), expected, "position " + expectedPosition);
+            expectedPosition++;
+        }
+        Assert.assertEquals(expectedPosition, 122);
+    }
+
+    @Test
+    public void lociWithoutNewReadsAfterAnOverflowingBatchKeepTheSurvivorsAndLevelTheNextRead() {
+        final int target = 10;
+        final int readLength = 10;
+        final List<GATKRead> reads = new ArrayList<>();
+        for (int i = 0; i < 15; i++) {
+            reads.add(ArtificialReadUtils.createArtificialRead(header, "batch" + i, 0, 100, readLength));
+        }
+        reads.add(ArtificialReadUtils.createArtificialRead(header, "later", 0, 105, readLength));
+        final LocusIteratorByState li = new LocusIteratorByState(
+                new FakeCloseableIterator<>(reads.iterator()),
+                new LIBSDownsamplingInfo(true, target),
+                sampleListForSAMWithoutReadGroups(),
+                header,
+                true);
+        int expectedPosition = 100;
+        while (li.hasNext()) {
+            final AlignmentContext context = li.next();
+            Assert.assertEquals(context.getLocation().getStart(), expectedPosition);
+            final Set<String> names = readNames(context.getBasePileup());
+            if (expectedPosition < 105) {
+                Assert.assertEquals(names.size(), target, "position " + expectedPosition);
+                Assert.assertFalse(names.contains("later"), "position " + expectedPosition);
+            } else if (expectedPosition < 110) {
+                Assert.assertEquals(names.size(), target, "position " + expectedPosition);
+                Assert.assertTrue(names.contains("later"), "position " + expectedPosition);
+            } else {
+                Assert.assertEquals(names, Collections.singleton("later"), "position " + expectedPosition);
+            }
+            expectedPosition++;
+        }
+        Assert.assertEquals(expectedPosition, 115);
+    }
 }
