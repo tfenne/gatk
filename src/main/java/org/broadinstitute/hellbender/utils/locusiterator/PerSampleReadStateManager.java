@@ -186,6 +186,16 @@ final class PerSampleReadStateManager implements Iterable<AlignmentStateMachine>
     }
 
     /**
+     * The read state at the given index, in alignment start order.
+     *
+     * @param index an index from 0 to {@link #size()} - 1
+     * @return the read state at that index
+     */
+    public AlignmentStateMachine get(final int index) {
+        return readStatesByAlignmentStart.get(index);
+    }
+
+    /**
      * Advances all read states forward by one element, removing states that are
      * no long aligned to the current position.
      * @return the number of states we're removed after advancing

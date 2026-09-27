@@ -12,7 +12,6 @@ import org.broadinstitute.hellbender.utils.downsampling.DownsamplingMethod;
 import org.broadinstitute.hellbender.utils.pileup.PileupElement;
 import org.broadinstitute.hellbender.utils.pileup.ReadPileup;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
-import org.broadinstitute.hellbender.utils.read.ReadUtils;
 
 import java.util.*;
 
@@ -41,6 +40,9 @@ import java.util.*;
 public final class LocusIteratorByState implements Iterator<AlignmentContext> {
     /** Indicates that we shouldn't do any downsampling */
     public static final LIBSDownsamplingInfo NO_DOWNSAMPLING = new LIBSDownsamplingInfo(false, -1);
+
+    /** Extra capacity given to each pileup list beyond the previous locus's pileup size. */
+    private static final int PILEUP_CAPACITY_SLACK = 16;
 
     /**
      * our log, which we want to capture anything from this class
@@ -75,6 +77,9 @@ public final class LocusIteratorByState implements Iterator<AlignmentContext> {
      * the underlying iterator is exhausted
      */
     private AlignmentContext nextAlignmentContext;
+
+    // Size of the pileup built at the previous locus, which sizes the list for the next one.
+    private int lastPileupSize = 0;
 
     // -----------------------------------------------------------------------------------------------------------------
     //
@@ -287,27 +292,28 @@ public final class LocusIteratorByState implements Iterator<AlignmentContext> {
             readStates.collectPendingReads();
 
             final Locatable location = getLocation();
+            // The location is null only when no read states remain, in which case the loops below visit nothing.
+            final int position = location == null ? -1 : location.getStart();
 
             // We don't need to keep the pileup elements separated by sample within this method,
             // since they are just going to get combined into one monolithic pileup anyway
             // when we construct the final ReadPileup below. This optimization speeds up the
-            // HaplotypeCaller by quite a bit!
-            final List<PileupElement> allPileupElements = new ArrayList<>(100);
+            // HaplotypeCaller by quite a bit! Consecutive loci hold nearly the same reads, so the
+            // previous pileup's size is the capacity guess.
+            final List<PileupElement> allPileupElements = new ArrayList<>(lastPileupSize + PILEUP_CAPACITY_SLACK);
 
             for (final PerSampleReadStateManager readState : readStates.perSampleManagers()) {
-                final Iterator<AlignmentStateMachine> iterator = readState.iterator();
-
-                while (iterator.hasNext()) {
+                final int nStates = readState.size();
+                for (int i = 0; i < nStates; i++) {
                     // state object with the read/offset information
-                    final AlignmentStateMachine state = iterator.next();
-                    final GATKRead read = state.getRead();
+                    final AlignmentStateMachine state = readState.get(i);
                     final CigarOperator op = state.getCigarOperator();
 
                     if (!includeReadsWithNsAtLoci && op == CigarOperator.N) {
                         continue;
                     }
 
-                    if (!dontIncludeReadInPileup(read, location.getStart())) {
+                    if (!state.isBaseInsideAdaptor(position)) {
                         if (!includeReadsWithDeletionAtLoci && op == CigarOperator.D) {
                             continue;
                         }
@@ -316,25 +322,13 @@ public final class LocusIteratorByState implements Iterator<AlignmentContext> {
                     }
                 }
             }
+            lastPileupSize = allPileupElements.size();
 
             readStates.updateReadStates(); // critical - must be called after we get the current state offsets and location
             if (!allPileupElements.isEmpty()) { // if we got reads with non-D/N over the current position, we are done
                 nextAlignmentContext = new AlignmentContext(location, new ReadPileup(location, allPileupElements));
             }
         }
-    }
-
-    /**
-     * Should this read be excluded from the pileup?
-     *
-     * Generic place to put per-base filters appropriate to LocusIteratorByState
-     *
-     * @param rec the read to potentially exclude
-     * @param pos the genomic position of the current alignment
-     * @return true if the read should be excluded from the pileup, false otherwise
-     */
-    private static boolean dontIncludeReadInPileup(final GATKRead rec, final long pos) {
-        return ReadUtils.isBaseInsideAdaptor(rec, pos);
     }
 
 }

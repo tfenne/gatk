@@ -1105,11 +1105,34 @@ public final class ReadUtils {
      * @return whether or not the base is in the adaptor
      */
     public static boolean isBaseInsideAdaptor(final GATKRead read, long basePos) {
-        final int adaptorBoundary = read.getAdaptorBoundary();
-        if (adaptorBoundary == CANNOT_COMPUTE_ADAPTOR_BOUNDARY || read.getFragmentLength() > DEFAULT_ADAPTOR_SIZE)
-            return false;
+        final int adaptorBoundary = adaptorBoundaryForBaseChecks(read);
+        return adaptorBoundary != CANNOT_COMPUTE_ADAPTOR_BOUNDARY && isPastAdaptorBoundary(read.isReverseStrand(), adaptorBoundary, basePos);
+    }
 
-        return read.isReverseStrand() ? basePos <= adaptorBoundary : basePos >= adaptorBoundary;
+    /**
+     * The adaptor boundary that {@link #isBaseInsideAdaptor} tests bases against. Callers that test many bases of
+     * one read compute this once.
+     *
+     * @param read the read whose bases are to be tested
+     * @return the boundary, or {@link #CANNOT_COMPUTE_ADAPTOR_BOUNDARY} when the read has no computable boundary or
+     *         its fragment is too long for any of its bases to lie in the adaptor
+     */
+    public static int adaptorBoundaryForBaseChecks(final GATKRead read) {
+        final int adaptorBoundary = read.getAdaptorBoundary();
+        return adaptorBoundary == CANNOT_COMPUTE_ADAPTOR_BOUNDARY || read.getFragmentLength() > DEFAULT_ADAPTOR_SIZE
+                ? CANNOT_COMPUTE_ADAPTOR_BOUNDARY : adaptorBoundary;
+    }
+
+    /**
+     * Whether a base lies on the adaptor side of a boundary from {@link #adaptorBoundaryForBaseChecks}.
+     *
+     * @param reverseStrand whether the read is on the reverse strand, which puts the adaptor before the boundary
+     * @param adaptorBoundary a computable boundary from {@link #adaptorBoundaryForBaseChecks}
+     * @param basePos the reference position of the base
+     * @return true if the base lies at or beyond the boundary on the adaptor side
+     */
+    public static boolean isPastAdaptorBoundary(final boolean reverseStrand, final int adaptorBoundary, final long basePos) {
+        return reverseStrand ? basePos <= adaptorBoundary : basePos >= adaptorBoundary;
     }
 
     /**
