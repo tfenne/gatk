@@ -2,6 +2,7 @@ package org.broadinstitute.hellbender.tools.walkers.haplotypecaller.readthreadin
 
 import com.google.common.annotations.VisibleForTesting;
 import htsjdk.samtools.util.Locatable;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.Kmer;
@@ -149,13 +150,74 @@ public class ReadThreadingGraph extends AbstractReadThreadingGraph {
         return pending.values().stream().flatMap(oneSampleWorth -> oneSampleWorth.stream()).collect(Collectors.toList());
     }
 
+    /** The longest kmer whose bases fit in a long at two bits per base. */
+    private static final int MAX_PACKED_KMER_SIZE = Long.SIZE / 2;
+
     /**
      * Get the collection of non-unique kmers from sequence for kmer size kmerSize
      * @param seqForKmers a sequence to get kmers from
      * @param kmerSize the size of the kmers
-     * @return a non-null collection of non-unique kmers in sequence
+     * @return a non-null collection of non-unique kmers in sequence: one entry for every occurrence of a kmer after
+     *         its first, in sequence order
      */
     static Collection<Kmer> determineNonUniqueKmers(final SequenceForKmers seqForKmers, final int kmerSize) {
+        if (kmerSize > MAX_PACKED_KMER_SIZE) {
+            return determineNonUniqueKmersAsObjects(seqForKmers, kmerSize);
+        }
+        // Kmers made only of A, C, G and T are compared as two-bit-packed longs, so a Kmer is only built for a
+        // repeat. A kmer containing any other base can never equal one of those, so such kmers are compared as Kmers
+        // in a set of their own.
+        final byte[] sequence = seqForKmers.sequence;
+        final int kmerCount = seqForKmers.stop - kmerSize + 1;
+        // fastutil takes the expected element count and applies its load factor itself.
+        final LongOpenHashSet packedKmers = new LongOpenHashSet(Math.max(16, kmerCount));
+        Set<Kmer> unpackableKmers = null;
+        final List<Kmer> nonUniqueKmers = new ArrayList<>();
+        final long mask = kmerSize == MAX_PACKED_KMER_SIZE ? -1L : (1L << (2 * kmerSize)) - 1;
+        long packedKmer = 0;
+        int packableRunLength = 0;
+        for (int end = 0; end < kmerCount + kmerSize - 1; end++) {
+            final int code = twoBitCode(sequence[end]);
+            if (code < 0) {
+                packableRunLength = 0;
+            } else {
+                packedKmer = ((packedKmer << 2) | code) & mask;
+                packableRunLength++;
+            }
+            final int start = end - kmerSize + 1;
+            if (start < 0) {
+                continue;
+            }
+            if (packableRunLength >= kmerSize) {
+                if (!packedKmers.add(packedKmer)) {
+                    nonUniqueKmers.add(new Kmer(sequence, start, kmerSize));
+                }
+            } else {
+                if (unpackableKmers == null) {
+                    unpackableKmers = new HashSet<>();
+                }
+                final Kmer kmer = new Kmer(sequence, start, kmerSize);
+                if (!unpackableKmers.add(kmer)) {
+                    nonUniqueKmers.add(kmer);
+                }
+            }
+        }
+        return nonUniqueKmers;
+    }
+
+    /** @return the two-bit code of an upper-case A, C, G or T, or -1 for any other base (lower case included) */
+    private static int twoBitCode(final byte base) {
+        switch (base) {
+            case 'A': return 0;
+            case 'C': return 1;
+            case 'G': return 2;
+            case 'T': return 3;
+            default: return -1;
+        }
+    }
+
+    /** As {@link #determineNonUniqueKmers}, for kmers of any size. */
+    private static Collection<Kmer> determineNonUniqueKmersAsObjects(final SequenceForKmers seqForKmers, final int kmerSize) {
         // count up occurrences of kmers within each read
         final int stopPosition = seqForKmers.stop - kmerSize;
         // The sequence holds stopPosition + 1 kmers; size the set to hold all of them at the default
