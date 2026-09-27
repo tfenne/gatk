@@ -7,9 +7,13 @@ import htsjdk.variant.variantcontext.*;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.mutable.MutableInt;
 import org.apache.commons.lang3.tuple.Pair;
+import org.apache.logging.log4j.LogManager;
 import org.broadinstitute.hellbender.GATKBaseTest;
 import org.broadinstitute.gatk.nativebindings.smithwaterman.SWParameters;
 import org.broadinstitute.hellbender.engine.AssemblyRegion;
+import org.broadinstitute.hellbender.tools.FlowBasedArgumentCollection;
+import org.broadinstitute.hellbender.utils.fasta.CachingIndexedFastaSequenceFile;
+import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
 import org.broadinstitute.hellbender.utils.BaseUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
@@ -78,6 +82,39 @@ public class AssemblyBasedCallerUtilsUnitTest extends GATKBaseTest {
         // make sure that the original reads are not changed due to finalizeRegion()
         Assert.assertTrue(reads.get(0).convertToSAMRecord(header).equals(orgRead0));
         Assert.assertTrue(reads.get(1).convertToSAMRecord(header).equals(orgRead1));
+    }
+
+    /** Assembles reference-matching reads over a small region of hg19mini and returns the finalized region. */
+    private static AssemblyRegion assembleReferenceReads(final boolean usePileupDetection) {
+        try (final CachingIndexedFastaSequenceFile reference = new CachingIndexedFastaSequenceFile(IOUtils.getPath(hg19MiniReference))) {
+            final SAMFileHeader header = ArtificialReadUtils.createArtificialSamHeader(reference.getSequenceDictionary());
+            final SAMReadGroupRecord readGroup = new SAMReadGroupRecord("rg");
+            readGroup.setSample("sample");
+            header.addReadGroup(readGroup);
+            final AssemblyRegion region = new AssemblyRegion(new SimpleInterval("1", 1000, 1300), 100, header);
+            for (int start = 1000; start <= 1200; start += 20) {
+                final byte[] bases = reference.getSubsequenceAt("1", start, start + 99).getBases();
+                final GATKRead read = ArtificialReadUtils.createArtificialRead(header, "read" + start, 0, start, bases, Utils.dupBytes((byte) 30, bases.length), "100M");
+                read.setReadGroup(readGroup.getId());
+                region.add(read);
+            }
+            final HaplotypeCallerArgumentCollection args = new HaplotypeCallerArgumentCollection();
+            args.pileupDetectionArgs.usePileupDetection = usePileupDetection;
+            AssemblyBasedCallerUtils.assembleReads(region, args, header, SampleList.singletonSampleList("sample"), LogManager.getLogger(AssemblyBasedCallerUtilsUnitTest.class),
+                    reference, args.createReadThreadingAssembler(), SmithWatermanAligner.getAligner(SmithWatermanAligner.Implementation.JAVA), true, new FlowBasedArgumentCollection(), false);
+            return region;
+        }
+    }
+
+    @Test
+    public void assembleReadsTracksHardClippedReadsOnlyForPileupDetection() {
+        final AssemblyRegion withoutPileupDetection = assembleReferenceReads(false);
+        Assert.assertEquals(withoutPileupDetection.getReads().size(), 11);
+        Assert.assertTrue(withoutPileupDetection.getHardClippedPileupReads().isEmpty());
+
+        final AssemblyRegion withPileupDetection = assembleReferenceReads(true);
+        Assert.assertEquals(withPileupDetection.getReads().size(), 11);
+        Assert.assertEquals(withPileupDetection.getHardClippedPileupReads().size(), 11);
     }
 
     // ------------------------------------------------------------------------

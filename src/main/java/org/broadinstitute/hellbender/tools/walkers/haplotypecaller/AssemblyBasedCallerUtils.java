@@ -343,7 +343,7 @@ public final class AssemblyBasedCallerUtils {
                 correctOverlappingBaseQualities,
                 argumentCollection.softClipLowQualityEnds,
                 argumentCollection.overrideSoftclipFragmentCheck,
-                true);
+                argumentCollection.pileupDetectionArgs.usePileupDetection);
 
 
         if( argumentCollection.assemblerArgs.debugAssembly) {
