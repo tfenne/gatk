@@ -186,6 +186,58 @@ public final class AssemblyRegionUnitTest extends GATKBaseTest {
         }
     }
 
+    private AssemblyRegion regionWithReads(final String... readNames) {
+        final AssemblyRegion region = new AssemblyRegion(new SimpleInterval(contig, 100, 200), true, 0, header);
+        for ( final String name : readNames ) {
+            region.add(ArtificialReadUtils.createArtificialRead(header, name, 0, 100, 50));
+        }
+        return region;
+    }
+
+    @Test
+    public void removeAllWithEmptyCollectionLeavesReadsUntouched() {
+        final AssemblyRegion region = regionWithReads("a", "b", "c");
+        final List<GATKRead> before = new ArrayList<>(region.getReads());
+        region.removeAll(Collections.emptyList());
+        Assert.assertEquals(region.getReads(), before);
+    }
+
+    @Test
+    public void removeAllPreservesOrderOfRemainingReads() {
+        final AssemblyRegion region = regionWithReads("a", "b", "c", "d");
+        final List<GATKRead> reads = region.getReads();
+        region.removeAll(Arrays.asList(reads.get(2), reads.get(0)));
+        Assert.assertEquals(region.getReads(), Arrays.asList(reads.get(1), reads.get(3)));
+    }
+
+    @Test
+    public void removeAllMatchesReadsByIdentityNotByValue() {
+        final AssemblyRegion region = regionWithReads("a", "b");
+        final GATKRead equalCopyOfA = region.getReads().get(0).copy();
+        Assert.assertEquals(equalCopyOfA, region.getReads().get(0));
+        region.removeAll(Collections.singletonList(equalCopyOfA));
+        Assert.assertEquals(region.size(), 2);
+    }
+
+    @Test
+    public void removeAllRemovesEveryInstancePassedEvenWhenTheyAreEqual() {
+        final AssemblyRegion region = regionWithReads("a", "b");
+        final GATKRead a = region.getReads().get(0);
+        final GATKRead b = region.getReads().get(1);
+        final GATKRead equalCopyOfA = a.copy();
+        region.add(equalCopyOfA);
+        region.removeAll(Arrays.asList(a, equalCopyOfA));
+        Assert.assertEquals(region.getReads(), Collections.singletonList(b));
+    }
+
+    @Test
+    public void removeAllIgnoresReadsNotInTheRegion() {
+        final AssemblyRegion region = regionWithReads("a", "b");
+        final GATKRead outsider = ArtificialReadUtils.createArtificialRead(header, "z", 0, 100, 50);
+        region.removeAll(Collections.singletonList(outsider));
+        Assert.assertEquals(region.size(), 2);
+    }
+
     // -----------------------------------------------------------------------------------------------
     //
     // Make sure bad inputs are properly detected

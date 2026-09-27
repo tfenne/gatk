@@ -1,5 +1,8 @@
 package org.broadinstitute.hellbender.tools.walkers.haplotypecaller;
 
+import htsjdk.samtools.SAMFileHeader;
+import htsjdk.samtools.SAMReadGroupRecord;
+import htsjdk.samtools.SAMSequenceDictionary;
 import org.broadinstitute.hellbender.GATKBaseTest;
 import org.broadinstitute.hellbender.engine.*;
 import org.broadinstitute.hellbender.engine.filters.ReadFilter;
@@ -11,6 +14,7 @@ import org.broadinstitute.hellbender.utils.downsampling.DownsamplingMethod;
 import org.broadinstitute.hellbender.utils.fasta.CachingIndexedFastaSequenceFile;
 import org.broadinstitute.hellbender.utils.iterators.ReadFilteringIterator;
 import org.broadinstitute.hellbender.utils.locusiterator.LocusIteratorByState;
+import org.broadinstitute.hellbender.utils.read.ArtificialReadUtils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.read.ReadUtils;
 import org.testng.Assert;
@@ -22,6 +26,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 
@@ -73,6 +78,66 @@ public class HaplotypeCallerEngineUnitTest extends GATKBaseTest {
                 final double expectedIsActiveValue = expectedActiveSites.contains(pileupInterval) ? 1.0 : 0.0;
                 Assert.assertEquals(isActiveResult.isActiveProb(), expectedIsActiveValue, "Wrong isActive probability for site " + pileupInterval);
             });
+        }
+    }
+
+    private static HaplotypeCallerEngine engineFor(final SAMFileHeader header, final CachingIndexedFastaSequenceFile referenceReader) {
+        final HaplotypeCallerArgumentCollection hcArgs = new HaplotypeCallerArgumentCollection();
+        return new HaplotypeCallerEngine(hcArgs, new AssemblyRegionArgumentCollection(), false, false, header, referenceReader,
+                new VariantAnnotatorEngine(new ArrayList<>(), hcArgs.dbsnp.dbsnp, hcArgs.comps, false, false));
+    }
+
+    /** A header over the given dictionary with one read group per sample, each read group named after its sample. */
+    private static SAMFileHeader headerWithSamples(final SAMSequenceDictionary dictionary, final String... samples) {
+        final SAMFileHeader header = ArtificialReadUtils.createArtificialSamHeader(dictionary);
+        for (final String sample : samples) {
+            final SAMReadGroupRecord readGroup = new SAMReadGroupRecord(sample);
+            readGroup.setSample(sample);
+            header.addReadGroup(readGroup);
+        }
+        return header;
+    }
+
+    private static GATKRead readAt(final SAMFileHeader header, final String name, final int start, final int mappingQuality, final String sample) {
+        final GATKRead read = ArtificialReadUtils.createArtificialRead(header, name, 0, start, 50);
+        read.setMappingQuality(mappingQuality);
+        read.setReadGroup(sample);
+        return read;
+    }
+
+    @Test
+    public void filterNonPassingReadsRemovesEveryCopyOfADuplicatedRecord() throws IOException {
+        try (final CachingIndexedFastaSequenceFile referenceReader = new CachingIndexedFastaSequenceFile(Paths.get(b37_reference_20_21))) {
+            final SAMFileHeader header = headerWithSamples(referenceReader.getSequenceDictionary(), "sample1");
+            final HaplotypeCallerEngine engine = engineFor(header, referenceReader);
+            final AssemblyRegion region = new AssemblyRegion(new SimpleInterval("20", 10000000, 10001000), 0, header);
+            final GATKRead lowMappingQuality = readAt(header, "dup", 10000100, 5, "sample1");
+            final GATKRead equalCopy = lowMappingQuality.copy();
+            final GATKRead passing = readAt(header, "ok", 10000100, 60, "sample1");
+            region.addAll(Arrays.asList(lowMappingQuality, equalCopy, passing));
+            Assert.assertEquals(equalCopy, lowMappingQuality);
+
+            final List<GATKRead> filtered = engine.filterNonPassingReads(region);
+
+            Assert.assertEquals(region.getReads(), Collections.singletonList(passing));
+            Assert.assertEquals(filtered, Arrays.asList(lowMappingQuality, equalCopy));
+        }
+    }
+
+    @Test
+    public void removeReadsFromAllSamplesExceptRemovesEveryCopyOfADuplicatedRecord() throws IOException {
+        try (final CachingIndexedFastaSequenceFile referenceReader = new CachingIndexedFastaSequenceFile(Paths.get(b37_reference_20_21))) {
+            final SAMFileHeader header = headerWithSamples(referenceReader.getSequenceDictionary(), "sample1", "sample2");
+            final HaplotypeCallerEngine engine = engineFor(header, referenceReader);
+            final AssemblyRegion region = new AssemblyRegion(new SimpleInterval("20", 10000000, 10001000), 0, header);
+            final GATKRead otherSample = readAt(header, "other", 10000100, 60, "sample2");
+            final GATKRead equalCopy = otherSample.copy();
+            final GATKRead kept = readAt(header, "keep", 10000100, 60, "sample1");
+            region.addAll(Arrays.asList(otherSample, equalCopy, kept));
+
+            engine.removeReadsFromAllSamplesExcept("sample1", region);
+
+            Assert.assertEquals(region.getReads(), Collections.singletonList(kept));
         }
     }
 }
