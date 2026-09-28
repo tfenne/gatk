@@ -105,6 +105,10 @@ if [ -n "$STAGING_DIR" ]; then
         echo "${GIT_FETCH_COMMAND}"
         ${GIT_FETCH_COMMAND}
     fi
+    # Commits that exist only on the tfenne/gatk fork's branches are not in the repository cloned above.
+    if ! git cat-file -e "${GITHUB_TAG}^{commit}" 2>/dev/null; then
+        git fetch https://github.com/tfenne/gatk.git "${GITHUB_TAG}"
+    fi
     GIT_CHECKOUT_COMMAND="git checkout ${GITHUB_DIR}${GITHUB_TAG}"
     echo "${GIT_CHECKOUT_COMMAND}"
     ${GIT_CHECKOUT_COMMAND}
