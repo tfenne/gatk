@@ -1,6 +1,6 @@
 # GATK: high-performance germline calling
 
-This is a fork of [GATK](https://github.com/broadinstitute/gatk). Its default branch, `high_performance_germline_calling`, is GATK plus a set of performance changes to HaplotypeCaller. The first wave of changes is open as pull requests to GATK, and pull requests for the rest will follow once the first wave is reviewed. This branch carries all of them until they are merged upstream.
+This is a fork of [GATK](https://github.com/broadinstitute/gatk). Its default branch, `high_performance_germline_calling`, is GATK plus a set of performance changes to HaplotypeCaller and, from `hpgc-v5`, to joint calling. The first wave of changes is open as pull requests to GATK, and pull requests for the rest will follow once the first wave is reviewed. This branch carries all of them until they are merged upstream.
 
 For GATK itself (documentation, tools, support), see the [upstream README](https://github.com/broadinstitute/gatk/blob/master/README.md).
 
@@ -74,7 +74,7 @@ Each shard is run on both samples with two repeats. The baseline and the candida
 
 ## What's Changed on this Branch?
 
-Each batch is a tag on this branch (`4.7.0.0-hpgc-v1` to `4.7.0.0-hpgc-v4`), and a change's batch is the first tag that contains it. CPU change is measured on x86 as described [above](#how-we-benchmarked), against the row before, as HG00123 / NA18489; "within noise" means under about 1.5% or not consistent between the two samples.
+Each batch is a tag on this branch (`4.7.0.0-hpgc-v1` to `4.7.0.0-hpgc-v4`), and a change's batch is the first tag that contains it. Changes merged since the latest tag are listed as `hpgc-v5`, which is not yet tagged. CPU change is measured on x86 as described [above](#how-we-benchmarked), against the row before, as HG00123 / NA18489; "within noise" means under about 1.5% or not consistent between the two samples.
 
 | PR | Batch | Change | Changes gVCF? | Median shards | Segdup shard | chr1 centromere shard |
 |---|---|---|---|---|---|---|
@@ -99,6 +99,23 @@ Each batch is a tag on this branch (`4.7.0.0-hpgc-v1` to `4.7.0.0-hpgc-v4`), and
 | [`perf/lazy-called-haplotypes-message`](https://github.com/tfenne/gatk/tree/perf/lazy-called-haplotypes-message) | `hpgc-v3` | Builds the message for a validation check on the called haplotypes only when the check fails, instead of rendering every variant and haplotype of each region as a string. | No | within noise | within noise | within noise |
 | [`perf/fgkl-0.2.0`](https://github.com/tfenne/gatk/tree/perf/fgkl-0.2.0) | `hpgc-v4` | Updates fgkl to 0.2.0: Smith-Waterman fill 1.3–2.2x faster, and a PairHMM that shares the computation of haplotype suffixes as well as prefixes, cutting its kernel time by more than half. | PL and GQ at some sites; see [Concordance](#concordance) | −3.8% / −7.5% | −6.6% / −13.9% | −30.8% / −31.9% |
 
+### Joint calling
+
+Changes to reblocking and GenomicsDB import, measured on 100 reblocked samples as described [below](#how-we-measured-joint-calling), against the same run without the change.
+
+| Branch | Batch | Change | Changes output? | GenomicsDBImport | GnarlyGenotyper |
+|---|---|---|---|---|---|
+| [`perf/reblock-header-lines`](https://github.com/tfenne/gatk/tree/perf/reblock-header-lines) | `hpgc-v5` | ReblockGVCF's header declares only the fields its records can carry. It no longer declares the final annotations it never computes (QD, FS, SOR, the allele-specific finals and others), the annotations it removes, DRAGEN's DRAGstr fields, or MIN_DP under `--floor-blocks`. GenomicsDB stores and processes every declared field for every record, and a reblocked gVCF now declares 24–28 fields instead of 44–48. | Header lines only; records are unchanged, and GnarlyGenotyper and GenotypeGVCFs make identical calls | −40% | −19% |
+| [`perf/genomicsdb-compression`](https://github.com/tfenne/gatk/tree/perf/genomicsdb-compression) | `hpgc-v5` | Adds `--genomicsdb-compression <codec>[:<level>]` to GenomicsDBImport, to compress the workspace's tiles with gzip, zstd or lz4 instead of GenomicsDB's default, gzip at level 6. lz4 doubles the workspace's size and zstd:1 adds about 10%. zstd needs the system's `libzstd` wherever the workspace is written or read. | No; off unless set, and GnarlyGenotyper's calls are identical for every codec | lz4 −25%, zstd:1 −20% | lz4 −13%, zstd:1 −6% |
+
+#### How we measured joint calling
+
+- **Samples.** 100 of the [1000 Genomes high-coverage](https://www.internationalgenome.org/data-portal/data-collection/30x-grch38) per-sample gVCFs that NYGC made with GATK 3.5 HaplotypeCaller, from the AnVIL workspace [`anvil-datastorage/1000G-high-coverage-2019`](https://anvil.terra.bio/#workspaces/anvil-datastorage/1000G-high-coverage-2019), reblocked with WARP's arguments: `ReblockGVCF -do-qual-approx --floor-blocks -GQB 20 -GQB 30 -GQB 40`. For `perf/reblock-header-lines`, the same gVCFs reblocked with this branch and with `hpgc-v4`.
+- **Region.** WARP's calling regions in chr20:1–16 Mb (15.9 Mb).
+- **Import.** All samples in one batch through GenomicsDB's native reader (`--bypass-feature-reader`) with `--genomicsdb-shared-posixfs-optimizations`; the `perf/reblock-header-lines` runs also used `--genomicsdb-compression lz4`. GenomicsDB 1.5.5, as released.
+- **Genotyping.** GnarlyGenotyper with WARP's arguments (`-stand-call-conf 10 --max-alternate-alleles 5`) and `--genomicsdb-use-bcf-codec`.
+- **Hardware.** Single-threaded wall time on an Apple M-series Mac, not the AWS instances used for HaplotypeCaller. The runs compared in each row were made in the same benchmark pass.
+
 ## Concordance
 
 Each shard's gVCF was genotyped with single-sample `GenotypeGVCFs` from GATK 4.7.0.0, for every run alike. Variant genotypes were then compared at QUAL ≥ 30, which is the default calling threshold of both `GenotypeGVCFs` and `HaplotypeCaller` in VCF mode, as WARP runs it. A genotype counts as identical when its position, alleles and GT match.
@@ -122,6 +139,8 @@ The alleles at these sites are mostly known to [gnomAD v4.1](https://gnomad.broa
 ## Running it
 
 Build with `./gradlew localJar` (Java 17), or download the jar attached to the latest [release](https://github.com/tfenne/gatk/releases). Use WARP's HaplotypeCaller arguments, add `--max-effective-depth 100`, and request 1 vCPU and 4 GB per shard with `-Xmx3g`.
+
+For joint calling, reblock with this branch's ReblockGVCF, and add `--genomicsdb-compression lz4` to GenomicsDBImport, or `zstd:1` if the workspace is copied between hosts that all have `libzstd`.
 
 ## How the branch is maintained
 
