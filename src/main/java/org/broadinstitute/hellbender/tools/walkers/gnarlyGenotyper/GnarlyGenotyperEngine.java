@@ -113,7 +113,6 @@ public final class GnarlyGenotyperEngine {
         //GenomicsDB merged all the annotations, but we still need to finalize MQ and QD annotations
         //vcfBuilder gets the finalized annotations and annotationDBBuilder (if present) gets the raw annotations for the database
         final VariantContext vcWithMQ = mqCalculator.finalizeRawMQ(variant);
-        final VariantContextBuilder vcfBuilder = new VariantContextBuilder(vcWithMQ);
 
         //Because AS_StrandBias annotations both use and return the raw key
         final Map<String, Object> annotationsToBeModified = new HashMap<>(vcWithMQ.getAttributes());
@@ -125,7 +124,7 @@ public final class GnarlyGenotyperEngine {
                     if (variant.hasAttribute(ann.getPrimaryRawKey())) {
                         if (!stripASAnnotations) {
                             //here we still have the non-ref
-                            final Map<String, Object> finalValue = ann.finalizeRawData(vcfBuilder.make(), variant);
+                            final Map<String, Object> finalValue = ann.finalizeRawData(vcWithMQ, variant);
                             if (finalValue != null) {
                                 finalValue.forEach((key, value) -> annotationsToBeModified.put(key, value));
                             }
@@ -140,6 +139,7 @@ public final class GnarlyGenotyperEngine {
                 throw new IllegalStateException("Something went wrong at position " + variant.getContig() + ":" + variant.getStart() + ":", e);
             }
         }
+        final VariantContextBuilder vcfBuilder = new VariantContextBuilder(vcWithMQ);
         vcfBuilder.attributes(annotationsToBeModified);
 
         // tolerate lack of VarDP annotation
@@ -244,7 +244,8 @@ public final class GnarlyGenotyperEngine {
                     //trim NON_REF out of AS values
                     //trim NON_REF out of AS values
                     if (variant.hasAttribute(ann.getRawKeyNames().get(0))) {
-                        vcfBuilder.attribute(annotation.getKeyNames().get(0), trimASAnnotation(vcfBuilder.make(), targetAlleles, annotation.getKeyNames().get(0)));
+                        vcfBuilder.attribute(annotation.getKeyNames().get(0), trimASAnnotation(vcWithMQ.getAlternateAlleles(),
+                                vcfBuilder.getAttributes(), targetAlleles, annotation.getKeyNames().get(0)));
                     }
                     if (!keepAllSites && variant.hasAttribute(ann.getRawKeyNames().get(0))) {
                         vcfBuilder.rmAttribute(ann.getRawKeyNames().get(0));
@@ -453,17 +454,19 @@ public final class GnarlyGenotyperEngine {
 
     /**
      *  Trim an annotation to the values representing the target alleles
-     * @param variant   the VariantContext with annotations corresponding to the original alleles
+     * @param alternateAlleles  the original alternate alleles, to which the annotation's values correspond
+     * @param attributes    the site's annotations as they stand in its builder
      * @param targetAlleles the subset of alleles to retain
      * @param key   the key for the annotation of interest
      * @return  a String representing an array of allele-specific values matching targetAlleles
      */
-    private static String trimASAnnotation(final VariantContext variant, final List<Allele> targetAlleles, final String key) {
-        final int[] relevantIndices = targetAlleles.stream().filter(a -> !a.isReference()).mapToInt(a -> variant.getAlternateAlleles().indexOf(a)).toArray();
-        if (!variant.hasAttribute(key)) {
+    private static String trimASAnnotation(final List<Allele> alternateAlleles, final Map<String, Object> attributes,
+                                           final List<Allele> targetAlleles, final String key) {
+        final int[] relevantIndices = targetAlleles.stream().filter(a -> !a.isReference()).mapToInt(alternateAlleles::indexOf).toArray();
+        if (!attributes.containsKey(key)) {
             return null;
         }
-        final List<String> annotationEntries = AnnotationUtils.decodeAnyASList(variant.getAttribute(key).toString());
+        final List<String> annotationEntries = AnnotationUtils.decodeAnyASList(attributes.get(key).toString());
         if (annotationEntries == null) {
             return null;
         }
