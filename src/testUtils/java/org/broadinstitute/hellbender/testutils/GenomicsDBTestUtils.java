@@ -1,12 +1,22 @@
 package org.broadinstitute.hellbender.testutils;
 
 import htsjdk.samtools.util.Locatable;
+import htsjdk.variant.variantcontext.Allele;
+import htsjdk.variant.variantcontext.VariantContext;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
+import org.broadinstitute.hellbender.engine.FeatureDataSource;
+import org.broadinstitute.hellbender.engine.FeatureInput;
+import org.broadinstitute.hellbender.engine.GATKPath;
 import org.broadinstitute.hellbender.tools.genomicsdb.GenomicsDBImport;
+import org.broadinstitute.hellbender.tools.genomicsdb.GenomicsDBOptions;
+import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
+import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
 
 
@@ -84,5 +94,37 @@ public final class GenomicsDBTestUtils {
         }
         importer.runCommandLine(args);
         return new File(workspace);
+    }
+
+    /**
+     * @param genomicsDBUri a gendb:// URI
+     * @param interval the interval to query
+     * @param options the options to query GenomicsDB with, which must include a reference
+     * @return the combined records the query produces
+     */
+    public static List<VariantContext> readGenomicsDBRecords(final String genomicsDBUri, final Locatable interval,
+                                                             final GenomicsDBOptions options) {
+        final List<VariantContext> records = new ArrayList<>();
+        final FeatureInput<VariantContext> input = new FeatureInput<>(new GATKPath(genomicsDBUri));
+        try (final FeatureDataSource<VariantContext> source = new FeatureDataSource<>(input, 0, VariantContext.class, 0, 0, options)) {
+            final Iterator<VariantContext> iterator = source.query(new SimpleInterval(interval));
+            iterator.forEachRemaining(records::add);
+        }
+        return records;
+    }
+
+    /** @return whether the record has no alternate allele other than NON_REF */
+    public static boolean isReferenceOnly(final VariantContext vc) {
+        return alternateAllelesOtherThanNonRef(vc).isEmpty();
+    }
+
+    /** @return whether the record's alternate alleles, other than NON_REF, are all spanning deletions, and there are some */
+    public static boolean isSpanningDeletionOnly(final VariantContext vc) {
+        final List<Allele> alts = alternateAllelesOtherThanNonRef(vc);
+        return !alts.isEmpty() && alts.stream().allMatch(GATKVCFConstants::isSpanningDeletion);
+    }
+
+    private static List<Allele> alternateAllelesOtherThanNonRef(final VariantContext vc) {
+        return vc.getAlternateAlleles().stream().filter(a -> !a.isNonRefAllele()).toList();
     }
 }

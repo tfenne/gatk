@@ -18,9 +18,11 @@ import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
 import org.broadinstitute.hellbender.testutils.GenomicsDBTestUtils;
+import org.broadinstitute.hellbender.testutils.IntegrationTestSpec;
 import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
 import org.broadinstitute.hellbender.tools.genomicsdb.GenomicsDBArgumentCollection;
 import org.broadinstitute.hellbender.tools.genomicsdb.GenomicsDBImport;
+import org.broadinstitute.hellbender.tools.genomicsdb.GenomicsDBOptions;
 import org.broadinstitute.hellbender.tools.walkers.annotator.RMSMappingQuality;
 import org.broadinstitute.hellbender.tools.walkers.annotator.allelespecific.AS_QualByDepth;
 import org.broadinstitute.hellbender.tools.walkers.genotyper.GenotypeCalculationArgumentCollection;
@@ -281,6 +283,60 @@ public class GenotypeGVCFsIntegrationTest extends CommandLineProgramTest {
         // The default option with GenomicsDB input uses VCFCodec for decoding, test BCFCodec explicitly
         args.add("--"+GenomicsDBArgumentCollection.USE_BCF_CODEC_LONG_NAME);
         runGenotypeGVCFSAndAssertComparison(genomicsDBUri, expected, args, VariantContextTestUtils::assertVariantContextsHaveSameGenotypes, reference);
+    }
+
+    @Test
+    public void testSkippingNonVariantGenomicsDBIntervalsDoesNotChangeOutput() throws IOException {
+        final SimpleInterval interval = new SimpleInterval("chr20", 17960187, 17981445);
+        final String genomicsDBUri = createSkipTestGenomicsDB(interval);
+        final List<VariantContext> combinedRecords = GenomicsDBTestUtils.readGenomicsDBRecords(genomicsDBUri, interval,
+                new GenomicsDBOptions(new File(b38_reference_20_21).toPath()));
+        Assert.assertTrue(combinedRecords.stream().anyMatch(GenomicsDBTestUtils::isReferenceOnly));
+        Assert.assertTrue(combinedRecords.stream().anyMatch(GenomicsDBTestUtils::isSpanningDeletionOnly));
+
+        final File skipping = runGenotypeGVCFsOnGenomicsDB(genomicsDBUri, interval);
+        final File notSkipping = runGenotypeGVCFsOnGenomicsDB(genomicsDBUri, interval,
+                "--" + GenomicsDBArgumentCollection.SKIP_NON_VARIANT_INTERVALS_LONG_NAME, "false");
+
+        Assert.assertFalse(VariantContextTestUtils.readEntireVCFIntoMemory(skipping.getAbsolutePath()).getRight().isEmpty());
+        IntegrationTestSpec.assertEqualTextFiles(skipping, notSkipping, "#", false);
+    }
+
+    @Test
+    public void testNonVariantGenomicsDBIntervalsAreNotSkippedWhenNonVariantSitesAreIncluded() throws IOException {
+        final SimpleInterval interval = new SimpleInterval("chr20", 17960187, 17981445);
+        final String genomicsDBUri = createSkipTestGenomicsDB(interval);
+
+        final File byDefault = runGenotypeGVCFsOnGenomicsDB(genomicsDBUri, interval, "--" + GenotypeGVCFs.ALL_SITES_LONG_NAME);
+        final File notSkipping = runGenotypeGVCFsOnGenomicsDB(genomicsDBUri, interval, "--" + GenotypeGVCFs.ALL_SITES_LONG_NAME,
+                "--" + GenomicsDBArgumentCollection.SKIP_NON_VARIANT_INTERVALS_LONG_NAME, "false");
+
+        Assert.assertTrue(VariantContextTestUtils.readEntireVCFIntoMemory(byDefault.getAbsolutePath()).getRight().stream()
+                .anyMatch(GenomicsDBTestUtils::isReferenceOnly));
+        IntegrationTestSpec.assertEqualTextFiles(byDefault, notSkipping, "#", false);
+    }
+
+    /** @return the URI of a GenomicsDB workspace of three GATK 3 gVCFs over the interval */
+    private String createSkipTestGenomicsDB(final SimpleInterval interval) {
+        final List<File> gvcfs = Arrays.asList(new File(largeFileTestDir + "gvcfs/HG00096.g.vcf.gz"),
+                new File(largeFileTestDir + "gvcfs/HG00268.g.vcf.gz"), new File(largeFileTestDir + "gvcfs/NA19625.g.vcf.gz"));
+        return GenomicsDBTestUtils.makeGenomicsDBUri(GenomicsDBTestUtils.createTempGenomicsDB(gvcfs, interval));
+    }
+
+    private File runGenotypeGVCFsOnGenomicsDB(final String genomicsDBUri, final SimpleInterval interval, final String... extraArgs) {
+        final File output = createTempFile("GenotypeGVCFs.onGenomicsDB", ".vcf");
+        final ArgumentsBuilder args = new ArgumentsBuilder()
+                .addReference(new File(b38_reference_20_21))
+                .addVCF(genomicsDBUri)
+                .addInterval(interval)
+                .addOutput(output)
+                .add(StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE, false)
+                // these GATK 3 gVCFs carry the old RAW_MQ annotation
+                .add(RMSMappingQuality.RMS_MAPPING_QUALITY_OLD_BEHAVIOR_OVERRIDE_ARGUMENT, true);
+        Arrays.stream(extraArgs).forEach(args::addRaw);
+        Utils.resetRandomGenerator();
+        runCommandLine(args);
+        return output;
     }
 
     @Test  //here GDBMaxAlts is greater than GGVCFsMaxAlts

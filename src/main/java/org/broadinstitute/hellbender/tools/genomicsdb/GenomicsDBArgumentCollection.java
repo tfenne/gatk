@@ -11,6 +11,7 @@ public class GenomicsDBArgumentCollection implements Serializable {
   public static final String USE_BCF_CODEC_LONG_NAME = "genomicsdb-use-bcf-codec";
   public static final String SHARED_POSIXFS_OPTIMIZATIONS = "genomicsdb-shared-posixfs-optimizations";
   public static final String USE_GCS_HDFS_CONNECTOR = "genomicsdb-use-gcs-hdfs-connector";
+  public static final String SKIP_NON_VARIANT_INTERVALS_LONG_NAME = "genomicsdb-skip-non-variant-intervals";
 
   public static final String CALL_GENOTYPES_LONG_NAME = "call-genotypes";
   public static final String MAX_ALTS_LONG_NAME = "genomicsdb-max-alternate-alleles";
@@ -18,6 +19,7 @@ public class GenomicsDBArgumentCollection implements Serializable {
   private static final boolean DEFAULT_USE_BCF_CODEC = false;
   private static final boolean DEFAULT_SHARED_POSIXFS_OPTIMIZATIONS = false;
   private static final boolean DEFAULT_USE_GCS_HDFS_CONNECTOR = false;
+  private static final boolean DEFAULT_SKIP_NON_VARIANT_INTERVALS = true;
 
   /**
    * Maximum number of alternate alleles that will report likelihoods after being combined on reading from GenomicsDB (including <NON_REF>)
@@ -62,4 +64,17 @@ public class GenomicsDBArgumentCollection implements Serializable {
           doc = "Use the GCS HDFS Connector instead of the native GCS SDK client with gs:// URLs.",
           optional = true)
   public boolean useGcsHdfsConnector = DEFAULT_USE_GCS_HDFS_CONNECTOR;
+
+  /**
+   * Lets GenomicsDB skip the combined records, the large majority in a cohort, that tools emitting variant sites alone
+   * would discard.
+   */
+  @Advanced
+  @Argument(fullName = SKIP_NON_VARIANT_INTERVALS_LONG_NAME,
+          doc = "Have GenomicsDB skip intervals where every sample is in a reference block, and intervals whose " +
+                  "combined record has no alternate allele other than * and <NON_REF>. Applies only when the tool " +
+                  "emits variant sites alone: GnarlyGenotyper without --keep-all-sites, and GenotypeGVCFs without " +
+                  "--include-non-variant-sites or --force-output-intervals. No effect in other tools.",
+          optional = true)
+  public boolean skipNonVariantIntervals = DEFAULT_SKIP_NON_VARIANT_INTERVALS;
 }

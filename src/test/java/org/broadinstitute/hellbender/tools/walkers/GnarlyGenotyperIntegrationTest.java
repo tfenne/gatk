@@ -14,7 +14,10 @@ import org.broadinstitute.hellbender.utils.IntervalUtils;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
 import org.broadinstitute.hellbender.testutils.GenomicsDBTestUtils;
+import org.broadinstitute.hellbender.testutils.IntegrationTestSpec;
 import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
+import org.broadinstitute.hellbender.tools.genomicsdb.GenomicsDBArgumentCollection;
+import org.broadinstitute.hellbender.tools.genomicsdb.GenomicsDBOptions;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.variant.writers.IntervalFilteringVcfWriter;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
@@ -24,6 +27,7 @@ import org.testng.annotations.Test;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -144,6 +148,54 @@ public class GnarlyGenotyperIntegrationTest extends CommandLineProgramTest {
                 assertEqualVariants(actualDB, expectedDB);
             }
         }
+    }
+
+    @Test
+    public void testSkippingNonVariantGenomicsDBIntervalsDoesNotChangeOutput() throws IOException {
+        final List<SimpleInterval> intervals = Arrays.asList(new SimpleInterval("chr20", 250865, 348163));
+        final String genomicsDBUri = createSkipTestGenomicsDB(intervals);
+        final List<VariantContext> combinedRecords = GenomicsDBTestUtils.readGenomicsDBRecords(genomicsDBUri, intervals.get(0),
+                new GenomicsDBOptions(new File(b38_reference_20_21).toPath()));
+        Assert.assertTrue(combinedRecords.stream().anyMatch(GenomicsDBTestUtils::isReferenceOnly));
+        Assert.assertTrue(combinedRecords.stream().anyMatch(GenomicsDBTestUtils::isSpanningDeletionOnly));
+
+        final File skipping = runGnarlyOnGenomicsDB(genomicsDBUri, intervals, "skipping");
+        final File notSkipping = runGnarlyOnGenomicsDB(genomicsDBUri, intervals, "notSkipping",
+                "--" + GenomicsDBArgumentCollection.SKIP_NON_VARIANT_INTERVALS_LONG_NAME + " false");
+
+        Assert.assertFalse(getVariantContexts(skipping).isEmpty());
+        IntegrationTestSpec.assertEqualTextFiles(skipping, notSkipping, "#", false);
+    }
+
+    @Test
+    public void testNonVariantGenomicsDBIntervalsAreNotSkippedWhenAllSitesAreKept() throws IOException {
+        final List<SimpleInterval> intervals = Arrays.asList(new SimpleInterval("chr20", 250865, 348163));
+        final String genomicsDBUri = createSkipTestGenomicsDB(intervals);
+
+        final File byDefault = runGnarlyOnGenomicsDB(genomicsDBUri, intervals, "byDefault", "--keep-all-sites");
+        final File notSkipping = runGnarlyOnGenomicsDB(genomicsDBUri, intervals, "notSkipping", "--keep-all-sites",
+                "--" + GenomicsDBArgumentCollection.SKIP_NON_VARIANT_INTERVALS_LONG_NAME + " false");
+
+        Assert.assertTrue(getVariantContexts(byDefault).stream().anyMatch(GenomicsDBTestUtils::isReferenceOnly));
+        IntegrationTestSpec.assertEqualTextFiles(byDefault, notSkipping, "#", false);
+    }
+
+    /** @return the URI of a GenomicsDB workspace of five gVCFs spanning the intervals */
+    private String createSkipTestGenomicsDB(final List<SimpleInterval> intervals) {
+        final List<File> inputs = Arrays.asList(getTestFile("sample1.vcf"), getTestFile("sample2.vcf"),
+                getTestFile("sample3.vcf"), getTestFile("sample4.vcf"), getTestFile("sample5.vcf"));
+        return GenomicsDBTestUtils.makeGenomicsDBUri(
+                GenomicsDBTestUtils.createTempGenomicsDB(inputs, IntervalUtils.getSpanningInterval(intervals)));
+    }
+
+    private File runGnarlyOnGenomicsDB(final String genomicsDBUri, final List<SimpleInterval> intervals, final String label,
+                                       final String... extraArgs) {
+        final File output = createTempFile("GnarlyGenotyper." + label, ".vcf");
+        final List<String> args = new ArrayList<>(Arrays.asList("-stand-call-conf 10"));
+        args.addAll(Arrays.asList(extraArgs));
+        Utils.resetRandomGenerator();
+        runTool(genomicsDBUri, intervals, b38_reference_20_21, output, null, args);
+        return output;
     }
 
     protected void runTool(String input, List<SimpleInterval> intervals, String reference, File output, File outputDatabase, List<String> additionalArguments) {

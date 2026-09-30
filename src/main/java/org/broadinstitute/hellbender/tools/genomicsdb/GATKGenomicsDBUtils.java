@@ -129,7 +129,9 @@ public class GATKGenomicsDBUtils {
                         .setSitesOnlyQuery(false)
                         .setMaxDiploidAltAllelesThatCanBeGenotyped(genomicsDBOptions.getMaxDiploidAltAllelesThatCanBeGenotyped())
                         .setMaxGenotypeCount(genomicsDBOptions.getMaxGenotypeCount())
-                        .setEnableSharedPosixfsOptimizations(genomicsDBOptions.sharedPosixFSOptimizations());
+                        .setEnableSharedPosixfsOptimizations(genomicsDBOptions.sharedPosixFSOptimizations())
+                        .setSkipReferenceOnlyIntervals(genomicsDBOptions.skipNonVariantIntervals())
+                        .setSkipSpanningDeletionOnlyIntervals(genomicsDBOptions.skipNonVariantIntervals());
 
         // For the multi-interval support, we create multiple arrays (directories) in a single workspace -
         // one per interval. So, if you wish to import intervals ("chr1", [ 1, 100M ]) and ("chr2", [ 1, 100M ]),
