@@ -293,7 +293,10 @@ public final class GnarlyGenotyperEngine {
     //assume input genotypes are diploid
 
     /**
-     * Remove the NON_REF allele from the genotypes, updating PLs, ADs, and GT calls
+     * Remove the NON_REF allele from the genotypes, updating PLs, ADs, and GT calls. Also adds each called allele's
+     * calls to {@code targetAlleleCounts}, each genotype's strand-bias counts to {@code SBsum} and, if
+     * {@code rawGenotypeCounts} is non-null, one per genotype at the index of its number of alt alleles; all three add
+     * to the values the caller passes in.
      * @param vc the input variant with NON_REF
      * @return a GenotypesContext
      */
@@ -314,11 +317,13 @@ public final class GnarlyGenotyperEngine {
         final int maximumAlleleCount = inputAllelesWithNonRef.size();
         final int numConcreteAlts = maximumAlleleCount - 2; //-1 for NON_REF and -1 for ref
 
+        // calls of each target allele by index, since an Allele's hash code is recomputed from its bases on every map
+        // lookup; after the loop the called ones are added to targetAlleleCounts, so uncalled alleles stay out of it
+        final int[] targetAlleleCallCounts = new int[targetAlleles.size()];
+
         for ( final Genotype g : vc.getGenotypes() ) {
-            final String name = g.getSampleName();
             final Genotype calledGT;
             final GenotypeBuilder genotypeBuilder = new GenotypeBuilder(g);
-            genotypeBuilder.name(name);
             if (g.getAlleles().contains(Allele.NON_REF_ALLELE)) {
                 genotypeBuilder.alleles(GATKVariantContextUtils.noCallAlleles(g.getPloidy())).noGQ();
             //there will be cases when we're running over Y or haploid X and we haven't seen any variants yet
@@ -365,16 +370,30 @@ public final class GnarlyGenotyperEngine {
             //running total for AC values
             for (int i = 0; i < calledGT.getPloidy(); i++) {
                 final Allele a = calledGT.getAllele(i);
-                final int count = targetAlleleCounts.getOrDefault(a, 0);
                 if (!a.equals(Allele.NO_CALL)) {
-                    targetAlleleCounts.put(a,count+1);
+                    final int targetIndex = targetAlleles.indexOf(a);
+                    if (targetIndex >= 0) {
+                        targetAlleleCallCounts[targetIndex]++;
+                    } else {
+                        targetAlleleCounts.merge(a, 1, Integer::sum);
+                    }
                 }
             }
 
             //re-tally genotype counts if they are missing from the original VC
             if (rawGenotypeCounts != null) {
-                final int altCount = (int)g.getAlleles().stream().filter(a -> !a.isReference()).count();
+                int altCount = 0;
+                for (final Allele a : g.getAlleles()) {
+                    if (!a.isReference()) {
+                        altCount++;
+                    }
+                }
                 rawGenotypeCounts[altCount]++;
+            }
+        }
+        for (int i = 0; i < targetAlleleCallCounts.length; i++) {
+            if (targetAlleleCallCounts[i] > 0) {
+                targetAlleleCounts.merge(targetAlleles.get(i), targetAlleleCallCounts[i], Integer::sum);
             }
         }
         return mergedGenotypes;

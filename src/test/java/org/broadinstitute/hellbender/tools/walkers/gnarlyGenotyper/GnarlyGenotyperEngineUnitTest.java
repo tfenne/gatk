@@ -77,4 +77,78 @@ public class GnarlyGenotyperEngineUnitTest {
         final List<Allele> calledAlleles2 = builder2.make().getAlleles();
         Assert.assertTrue(calledAlleles2.size() == 2 && calledAlleles2.contains(Aref) && calledAlleles2.contains(oneInserted));
     }
+
+    @Test
+    public void testAlleleCountsCountTheCalledAlleles() {
+        final Map<Allele, Integer> alleleCounts = new HashMap<>();
+        callGenotypes(triallelicRecord(), Arrays.asList(Aref, oneInserted, twoInserted), alleleCounts, null);
+
+        Assert.assertEquals(alleleCounts, Map.of(Aref, 8, oneInserted, 3, twoInserted, 1));
+    }
+
+    @Test
+    public void testAlleleCountsAreAddedToTheCountsPassedIn() {
+        final Map<Allele, Integer> alleleCounts = new HashMap<>(Map.of(Aref, 10, oneInserted, 0, twoInserted, 5));
+        callGenotypes(triallelicRecord(), Arrays.asList(Aref, oneInserted, twoInserted), alleleCounts, null);
+
+        Assert.assertEquals(alleleCounts, Map.of(Aref, 18, oneInserted, 3, twoInserted, 6));
+    }
+
+    @Test
+    public void testAlleleCountsDoNotCountNoCalls() {
+        final Genotype withNonRef = new GenotypeBuilder("s1", Arrays.asList(Aref, Allele.NON_REF_ALLELE)).make();
+        final VariantContext vc = VariantContextTestUtils.makeVC("test", Arrays.asList(Aref, oneInserted, Allele.NON_REF_ALLELE), withNonRef);
+        final Map<Allele, Integer> alleleCounts = new HashMap<>();
+        callGenotypes(vc, Arrays.asList(Aref, oneInserted), alleleCounts, null);
+
+        Assert.assertEquals(alleleCounts, Map.of());
+    }
+
+    @Test
+    public void testAlleleCountsCountCalledAllelesOutsideTheTargets() {
+        // with a GQ and no PLs, the genotype keeps its own call
+        final Genotype homTwoInserted = new GenotypeBuilder("s1", Arrays.asList(twoInserted, twoInserted)).GQ(30).make();
+        final VariantContext vc = VariantContextTestUtils.makeVC("test",
+                Arrays.asList(Aref, oneInserted, twoInserted, Allele.NON_REF_ALLELE), homTwoInserted);
+        final Map<Allele, Integer> alleleCounts = new HashMap<>();
+        callGenotypes(vc, Arrays.asList(Aref, oneInserted), alleleCounts, null);
+
+        Assert.assertEquals(alleleCounts, Map.of(twoInserted, 2));
+    }
+
+    @Test
+    public void testRawGenotypeCountsTallyGenotypesByNumberOfAltAlleles() {
+        final int[] rawGenotypeCounts = new int[3];
+        callGenotypes(triallelicRecord(), Arrays.asList(Aref, oneInserted, twoInserted), new HashMap<>(), rawGenotypeCounts);
+
+        Assert.assertEquals(rawGenotypeCounts, new int[]{3, 2, 1});
+    }
+
+    /**
+     * A record with two alt alleles and NON_REF at which three samples are hom-ref, two are REF/oneInserted and one is
+     * oneInserted/twoInserted, so each allele and each number of alt alleles has a different count.
+     */
+    private static VariantContext triallelicRecord() {
+        return VariantContextTestUtils.makeVC("test", Arrays.asList(Aref, oneInserted, twoInserted, Allele.NON_REF_ALLELE),
+                VariantContextTestUtils.makeG("homRef1", Aref, Aref, plsFavouring(0)),
+                VariantContextTestUtils.makeG("homRef2", Aref, Aref, plsFavouring(0)),
+                VariantContextTestUtils.makeG("homRef3", Aref, Aref, plsFavouring(0)),
+                VariantContextTestUtils.makeG("het1", Aref, oneInserted, plsFavouring(1)),
+                VariantContextTestUtils.makeG("het2", Aref, oneInserted, plsFavouring(1)),
+                VariantContextTestUtils.makeG("hetAlts", oneInserted, twoInserted, plsFavouring(4)));
+    }
+
+    /** @return diploid PLs over four alleles in which the genotype at {@code genotypeIndex} is the only likely one */
+    private static int[] plsFavouring(final int genotypeIndex) {
+        final int[] pls = new int[10];
+        Arrays.fill(pls, 450);
+        pls[genotypeIndex] = 0;
+        return pls;
+    }
+
+    private static void callGenotypes(final VariantContext vc, final List<Allele> targetAlleles,
+                                      final Map<Allele, Integer> alleleCounts, final int[] rawGenotypeCounts) {
+        new GnarlyGenotyperEngine(false, 4, false)
+                .iterateOnGenotypes(vc, targetAlleles, alleleCounts, new int[4], true, true, rawGenotypeCounts);
+    }
 }
