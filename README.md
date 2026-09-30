@@ -101,18 +101,20 @@ Each batch is a tag on this branch (`4.7.0.0-hpgc-v1` to `4.7.0.0-hpgc-v4`), and
 
 ### Joint calling
 
-Changes to reblocking and GenomicsDB import, measured on 100 reblocked samples as described [below](#how-we-measured-joint-calling), against the same run without the change.
+Changes to reblocking, GenomicsDB and GnarlyGenotyper, measured on 100 reblocked samples, or 1,000 where the row says so, as described [below](#how-we-measured-joint-calling), against the same run without the change.
 
 | PR | Batch | Change | Changes output? | GenomicsDBImport | GnarlyGenotyper |
 |---|---|---|---|---|---|
 | [#9446](https://github.com/broadinstitute/gatk/pull/9446) | `hpgc-v5` | ReblockGVCF's header declares only the fields its records can carry. It no longer declares the final annotations it never computes (QD, FS, SOR, the allele-specific finals and others), the annotations it removes, DRAGEN's DRAGstr fields, or MIN_DP under `--floor-blocks`. GenomicsDB stores and processes every declared field for every record, and a reblocked gVCF now declares 24–28 fields instead of 44–48. | Header lines only; records are unchanged, and GnarlyGenotyper and GenotypeGVCFs make identical calls | −40% | −19% |
 | [#9447](https://github.com/broadinstitute/gatk/pull/9447) | `hpgc-v5` | Adds `--genomicsdb-compression <codec>[:<level>]` to GenomicsDBImport, to compress the workspace's tiles with gzip, zstd or lz4 instead of GenomicsDB's default, gzip at level 6. lz4 doubles the workspace's size and zstd:1 adds about 10%. zstd needs the system's `libzstd` wherever the workspace is written or read. | No; off unless set, and GnarlyGenotyper's calls are identical for every codec | lz4 −25%, zstd:1 −20% | lz4 −13%, zstd:1 −6% |
+| [`perf/gnarly-genotype-path`](https://github.com/tfenne/gatk/tree/perf/gnarly-genotype-path) | `hpgc-v5` | GnarlyGenotyper counts each sample's called alleles in an array indexed by allele instead of a map keyed by `Allele`, whose hash code is recomputed from its bases on every lookup. It also no longer builds and validates a throwaway record for each allele-specific annotation it finalises. | No; records are identical | — | −2% at 1,000 samples; −5% with allele-specific annotations |
+| [`perf/genomicsdb-skip-non-variant-intervals`](https://github.com/tfenne/gatk/tree/perf/genomicsdb-skip-non-variant-intervals) | `hpgc-v5` | GnarlyGenotyper and GenotypeGVCFs ask GenomicsDB to skip the intervals that cannot produce a variant site: those where every sample is in a reference block, which are nearly all of a cohort's intervals, and those whose only alternate allele is a spanning deletion. The skip is off with `--keep-all-sites`, `--include-non-variant-sites` or `--force-output-intervals`, or with `--genomicsdb-skip-non-variant-intervals false`. It needs GenomicsDB export options that 1.5.5 lacks, so it builds only against the fork's GenomicsDB, which is not yet published. | No; records are identical | — | −59% at 1,000 samples, and a further −3% from the spanning deletions. GenotypeGVCFs: −44% at 100 samples, and a further −15% at 1,000 |
 
 #### How we measured joint calling
 
-- **Samples.** 100 of the [1000 Genomes high-coverage](https://www.internationalgenome.org/data-portal/data-collection/30x-grch38) per-sample gVCFs that NYGC made with GATK 3.5 HaplotypeCaller, from the AnVIL workspace [`anvil-datastorage/1000G-high-coverage-2019`](https://anvil.terra.bio/#workspaces/anvil-datastorage/1000G-high-coverage-2019), reblocked with WARP's arguments: `ReblockGVCF -do-qual-approx --floor-blocks -GQB 20 -GQB 30 -GQB 40`. For #9446, the same gVCFs reblocked with this branch and with `hpgc-v4`.
+- **Samples.** 100 of the [1000 Genomes high-coverage](https://www.internationalgenome.org/data-portal/data-collection/30x-grch38) per-sample gVCFs that NYGC made with GATK 3.5 HaplotypeCaller, from the AnVIL workspace [`anvil-datastorage/1000G-high-coverage-2019`](https://anvil.terra.bio/#workspaces/anvil-datastorage/1000G-high-coverage-2019), reblocked with WARP's arguments: `ReblockGVCF -do-qual-approx --floor-blocks -GQB 20 -GQB 30 -GQB 40`. For #9446, the same gVCFs reblocked with this branch and with `hpgc-v4`. Rows measured at 1,000 samples use 1,000 of the same gVCFs. "With allele-specific annotations" means those gVCFs with the allele-specific raw annotations this branch's HaplotypeCaller writes added to every variant record, built from the record's own values, since NYGC's gVCFs lack them.
 - **Region.** WARP's calling regions in chr20:1–16 Mb (15.9 Mb).
-- **Import.** All samples in one batch through GenomicsDB's native reader (`--bypass-feature-reader`) with `--genomicsdb-shared-posixfs-optimizations`; the #9446 runs also used `--genomicsdb-compression lz4`. GenomicsDB 1.5.5, as released.
+- **Import.** All samples in one batch through GenomicsDB's native reader (`--bypass-feature-reader`) with `--genomicsdb-shared-posixfs-optimizations`; the #9446 runs also used `--genomicsdb-compression lz4`. GenomicsDB 1.5.5 as released, except in the last two rows, whose runs used local builds of the fork's GenomicsDB.
 - **Genotyping.** GnarlyGenotyper with WARP's arguments (`-stand-call-conf 10 --max-alternate-alleles 5`) and `--genomicsdb-use-bcf-codec`.
 - **Hardware.** Single-threaded wall time on an Apple M-series Mac, not the AWS instances used for HaplotypeCaller. The runs compared in each row were made in the same benchmark pass.
 
@@ -140,7 +142,7 @@ The alleles at these sites are mostly known to [gnomAD v4.1](https://gnomad.broa
 
 Build with `./gradlew localJar` (Java 17), or download the jar attached to the latest [release](https://github.com/tfenne/gatk/releases). Use WARP's HaplotypeCaller arguments, add `--max-effective-depth 100`, and request 1 vCPU and 4 GB per shard with `-Xmx3g`.
 
-For joint calling, reblock with this branch's ReblockGVCF, and add `--genomicsdb-compression lz4` to GenomicsDBImport, or `zstd:1` if the workspace is copied between hosts that all have `libzstd`.
+For joint calling, reblock with this branch's ReblockGVCF, and add `--genomicsdb-compression lz4` to GenomicsDBImport, or `zstd:1` if the workspace is copied between hosts that all have `libzstd`. The branch currently builds only with the fork's GenomicsDB installed locally (see `perf/genomicsdb-skip-non-variant-intervals` above); the latest release, `hpgc-v4`, predates the joint-calling changes.
 
 ## How the branch is maintained
 
