@@ -29,17 +29,16 @@ public class GenomicsDBIntegrationTest extends CommandLineProgramTest {
 
     @Test
     public void testGenomicsDBInClassPath(){
-        final String path = "/"+System.mapLibraryName("tiledbgenomicsdb");
-        Assert.assertNotNull(GenomicsDBLibLoader.class.getResource(path), "Could not find the genomicsdb binary at " + path);
+        Assert.assertTrue(GenomicsDBLibLoader.loadLibrary(), "Could not load the GenomicsDB native library");
     }
 
     @Test
     public void testGenomicsDBJarForNativeLibraries() {
-        final String GENOMICSDB_LIBRARY_NAME = "/libtiledbgenomicsdb";
-        final String LINUX_DL_SUFFIX = ".so";
-        final String MACOSX_DL_SUFFIX = ".dylib";
-        Assert.assertNotNull(GenomicsDBLibLoader.class.getResource(GENOMICSDB_LIBRARY_NAME+LINUX_DL_SUFFIX), "Shared Library for Linux not found");
-        Assert.assertNotNull(GenomicsDBLibLoader.class.getResource(GENOMICSDB_LIBRARY_NAME+MACOSX_DL_SUFFIX), "Shared Library for Mac OSX not found");
+        // GenomicsDB's jar holds each platform's library in a directory named <os>-<arch>
+        for (final String library : new String[]{"/linux-x86_64/libtiledbgenomicsdb.so",
+                "/linux-aarch64/libtiledbgenomicsdb.so", "/macos-aarch64/libtiledbgenomicsdb.dylib"}) {
+            Assert.assertNotNull(GenomicsDBLibLoader.class.getResource(library), "GenomicsDB library not found at " + library);
+        }
     }
 
     @Test
