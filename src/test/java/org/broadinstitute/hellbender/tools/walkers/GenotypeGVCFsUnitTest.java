@@ -3,6 +3,7 @@ package org.broadinstitute.hellbender.tools.walkers;
 import htsjdk.variant.variantcontext.*;
 import org.broadinstitute.hellbender.GATKBaseTest;
 import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
+import org.broadinstitute.hellbender.tools.genomicsdb.GenomicsDBOptions;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 import org.broadinstitute.hellbender.utils.variant.GATKVariantContextUtils;
 import org.testng.Assert;
@@ -165,4 +166,28 @@ public class GenotypeGVCFsUnitTest extends GATKBaseTest {
         Assert.assertEquals(GATKVCFConstants.isSpanningDeletion(allele), expected);
     }
 
+    @Test
+    public void testGenomicsDBSkipsNonVariantIntervalsWhenOnlyVariantSitesAreEmitted() {
+        Assert.assertTrue(genomicsDBOptionsAfterParsing().skipNonVariantIntervals());
+    }
+
+    @Test
+    public void testGenomicsDBSkipsNoIntervalsWhenNonVariantSitesAreIncluded() {
+        Assert.assertFalse(genomicsDBOptionsAfterParsing("--" + GenotypeGVCFs.ALL_SITES_LONG_NAME).skipNonVariantIntervals());
+    }
+
+    @Test
+    public void testGenomicsDBSkipsNoIntervalsWhenOutputIsForced() {
+        Assert.assertFalse(genomicsDBOptionsAfterParsing("--" + GenotypeGVCFs.FORCE_OUTPUT_INTERVALS_NAME, "chr20:100")
+                .skipNonVariantIntervals());
+    }
+
+    /** @return the GenomicsDB options of a GenotypeGVCFs whose command line is parsed but which is not run */
+    private static GenomicsDBOptions genomicsDBOptionsAfterParsing(final String... extraArgs) {
+        final List<String> args = new ArrayList<>(Arrays.asList("-R", b38_reference_20_21, "-V", "gendb://unused", "-O", "unused.vcf"));
+        args.addAll(Arrays.asList(extraArgs));
+        final GenotypeGVCFs tool = new GenotypeGVCFs();
+        tool.getCommandLineParser().parseArguments(System.err, args.toArray(new String[0]));
+        return tool.getGenomicsDBOptions();
+    }
 }

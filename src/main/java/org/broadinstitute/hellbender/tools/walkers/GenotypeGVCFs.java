@@ -243,7 +243,10 @@ public final class GenotypeGVCFs extends VariantLocusWalker {
         if (genomicsDBOptions == null) {
             //extract called genotypes so hom refs with no PLs aren't ambiguous
             genomicsdbArgs.callGenotypes = true;
-            genomicsDBOptions = new GenomicsDBOptions(referenceArguments.getReferencePath(), genomicsdbArgs, genotypeArgs);
+            // Called before onTraversalStart, so the force-output state comes from the argument itself
+            final boolean onlyVariantSitesNeeded = !includeNonVariants && forceOutputIntervalStrings.isEmpty();
+            genomicsDBOptions = new GenomicsDBOptions(referenceArguments.getReferencePath(), genomicsdbArgs, genotypeArgs,
+                    onlyVariantSitesNeeded);
         }
         return genomicsDBOptions;
     }

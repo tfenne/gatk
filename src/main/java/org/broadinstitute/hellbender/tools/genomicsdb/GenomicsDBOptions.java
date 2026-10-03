@@ -16,6 +16,7 @@ public final class GenomicsDBOptions {
     final private boolean useBCFCodec;
     final private boolean sharedPosixFSOptimizations;
     final private boolean useGcsHdfsConnector;
+    final private boolean skipNonVariantIntervals;
 
     public GenomicsDBOptions() {
         this(null);
@@ -31,7 +32,19 @@ public final class GenomicsDBOptions {
 
     public GenomicsDBOptions(final Path reference, final GenomicsDBArgumentCollection genomicsdbArgs,
                              final GenotypeCalculationArgumentCollection genotypeCalcArgs) {
+        this(reference, genomicsdbArgs, genotypeCalcArgs, false);
+    }
+
+    /**
+     * Options for a tool that says whether it emits variant sites alone.
+     * @param onlyVariantSitesNeeded true if the tool emits variant sites alone, so GenomicsDB may skip intervals that
+     *                               cannot produce a variant site, unless the user has disabled that
+     */
+    public GenomicsDBOptions(final Path reference, final GenomicsDBArgumentCollection genomicsdbArgs,
+                             final GenotypeCalculationArgumentCollection genotypeCalcArgs,
+                             final boolean onlyVariantSitesNeeded) {
         this.reference = reference;
+        this.skipNonVariantIntervals = onlyVariantSitesNeeded && genomicsdbArgs.skipNonVariantIntervals;
         this.callGenotypes = genomicsdbArgs.callGenotypes;
         this.useBCFCodec = genomicsdbArgs.useBCFCodec;
         this.sharedPosixFSOptimizations = genomicsdbArgs.sharedPosixFSOptimizations;
@@ -76,5 +89,13 @@ public final class GenomicsDBOptions {
 
     public boolean useGcsHdfsConnector() {
         return useGcsHdfsConnector;
+    }
+
+    /**
+     * Whether GenomicsDB should skip intervals where every sample is in a reference block, and intervals whose combined
+     * record has no alternate allele other than * and NON_REF.
+     */
+    public boolean skipNonVariantIntervals() {
+        return skipNonVariantIntervals;
     }
 }
