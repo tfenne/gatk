@@ -28,7 +28,7 @@ Whole-genome HaplotypeCaller in DRAGEN-GATK mode, with WARP's arguments and WARP
 | Slowest ÷ median shard | 5.2 | 2.5 | **1.4** | 4.1 | 2.2 | **1.3** |
 | Speedup vs 4.7.0.0 (CPU hours) | – | 3.0x | **3.2x** | – | 3.1x | **3.4x** |
 
-HaplotypeCaller on this branch runs a shard in 1 vCPU and 4 GB or less, so its jobs pack onto the common 4 GB-per-vCPU machine shapes, such as AWS m-family instances and GCP n2-standard. 
+HaplotypeCaller on this branch runs a shard in 1 vCPU and 4 GB or less, so its jobs pack onto the common 4 GB-per-vCPU machine shapes, such as AWS m-family instances and GCP n2-standard. With the depth cap a 1.5 GB heap is also enough, so a shard fits in 2 GB and jobs pack onto 2 GB-per-vCPU shapes such as AWS c-family instances. 
 
 GATK 4.7.0.0 as WARP runs it reserves 2 vCPU and 10 GB per shard, so memory limits how many fit. A 16-vCPU, 64 GB machine runs 6 GATK 4.7.0.0 shards, with 4 vCPUs left idle, and 15–16 shards of this branch, depending on how much memory the scheduler holds back.
 
@@ -142,7 +142,7 @@ The alleles at these sites are mostly known to [gnomAD v4.1](https://gnomad.broa
 
 ## Running it
 
-Build with `./gradlew localJar` (Java 17), or download the jar attached to the latest [release](https://github.com/tfenne/gatk/releases). Use WARP's HaplotypeCaller arguments, add `--max-effective-depth 100`, and request 1 vCPU and 4 GB per shard with `-Xmx3g`.
+Build with `./gradlew localJar` (Java 17), or download the jar attached to the latest [release](https://github.com/tfenne/gatk/releases). Use WARP's HaplotypeCaller arguments, add `--max-effective-depth 100`, and request 1 vCPU and 4 GB per shard with `-Xmx3g`, the heap the whole-genome results above were measured with. Test on your own data before using a smaller heap.
 
 For joint calling, reblock with this branch's ReblockGVCF, and add `--genomicsdb-compression lz4` to GenomicsDBImport, or `zstd:1` if the workspace is copied between hosts that all have `libzstd`. From `hpgc-v5` the branch builds against the fork's GenomicsDB (`com.tfenne:genomicsdb:1.6.0`) and htsjdk 5.0.2, both on Maven Central.
 
